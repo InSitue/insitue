@@ -60,6 +60,8 @@ function App(props: { port: number }) {
   const [changes, setChanges] = useState<
     Array<{ file: string; diff: string; bytes: number }>
   >([]);
+  const [changeTurnId, setChangeTurnId] = useState("");
+  const [applied, setApplied] = useState("");
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -88,7 +90,17 @@ function App(props: { port: number }) {
           setTurnBusy(false);
         }
       },
-      onChangeset: (_t, files) => setChanges(files),
+      onChangeset: (turnId, files) => {
+        setChangeTurnId(turnId);
+        setChanges(files);
+        setApplied("");
+      },
+      onApplied: (_t, files, ref) => {
+        setApplied(
+          `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR should reload; re-select to verify`,
+        );
+        setChanges([]);
+      },
     });
     setClient(c);
     void c.connect();
@@ -106,6 +118,7 @@ function App(props: { port: number }) {
       setResolved(null);
       setReply("");
       setChanges([]);
+      setApplied("");
       setNote("resolving…");
       setOpen(true);
       client.submitCapture(b);
@@ -119,6 +132,7 @@ function App(props: { port: number }) {
     const turnId = `turn_${Date.now().toString(36)}`;
     setReply("");
     setChanges([]);
+    setApplied("");
     setTurnBusy(true);
     client.sendTurn(turnId, bundle.id, chatInput.trim());
   };
@@ -319,8 +333,39 @@ function App(props: { port: number }) {
                               ),
                               h(
                                 "span",
-                                { style: `color:${muted}` },
-                                "dry-run · apply lands in P4",
+                                {
+                                  style:
+                                    "display:flex;gap:6px;align-items:center",
+                                },
+                                [
+                                  h(
+                                    "button",
+                                    {
+                                      style: btn,
+                                      onClick: () => {
+                                        client?.sendDecision(
+                                          changeTurnId,
+                                          "approve",
+                                        );
+                                      },
+                                    },
+                                    "Approve & write",
+                                  ),
+                                  h(
+                                    "button",
+                                    {
+                                      style: `${btn};color:${muted}`,
+                                      onClick: () => {
+                                        client?.sendDecision(
+                                          changeTurnId,
+                                          "reject",
+                                        );
+                                        setChanges([]);
+                                      },
+                                    },
+                                    "Reject",
+                                  ),
+                                ],
                               ),
                             ],
                           ),
@@ -344,6 +389,15 @@ function App(props: { port: number }) {
                             ]),
                           ),
                         ])
+                      : null,
+                    applied
+                      ? h(
+                          "div",
+                          {
+                            style: `color:#5fd18a;margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
+                          },
+                          applied,
+                        )
                       : null,
                   ],
                 ),

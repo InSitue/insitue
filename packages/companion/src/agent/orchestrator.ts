@@ -19,6 +19,8 @@ import { ClaudeCodeProvider } from "./claude-code/provider.js";
 import type { AgentProvider, AgentSession } from "./provider.js";
 import { parseProposals, EDIT_START } from "./proposals.js";
 import { buildChangeset } from "../edit/gateway.js";
+import { applyEdits } from "../edit/mutator.js";
+import { checkpoint, type Checkpoint } from "../edit/git.js";
 
 export interface OrchestratorDeps {
   root: string;
@@ -35,6 +37,11 @@ interface StoredBundle {
 export class AgentOrchestrator {
   private readonly provider: AgentProvider;
   private readonly bundles = new Map<string, StoredBundle>();
+  /** turnId → the proposed edits that passed the dry-run, awaiting an
+   *  approve/reject decision. Cleared once decided. */
+  private readonly pending = new Map<string, ProposedEdit[]>();
+  /** turnId → pre-write checkpoint, kept for P5 `agent-undo`. */
+  private readonly checkpoints = new Map<string, Checkpoint>();
   private session: AgentSession | null = null;
   private busy = false;
 
@@ -144,6 +151,16 @@ export class AgentOrchestrator {
             if (edits.length) {
               const cs = buildChangeset(this.deps.root, edits);
               if (cs.files.length) {
+                // Keep the full contents for an approve decision; only
+                // the edits that survived the dry-run sandbox/no-op.
+                const accepted = edits.filter((e) =>
+                  cs.files.some((f) => f.file === e.file),
+                );
+                this.pending.set(event.turnId, accepted);
+                if (this.pending.size > 16) {
+                  const k = this.pending.keys().next().value;
+                  if (k !== undefined) this.pending.delete(k);
+                }
                 this.deps.send({
                   t: "changeset-proposed",
                   turnId: event.turnId,
@@ -176,14 +193,76 @@ export class AgentOrchestrator {
     }
   }
 
-  handleDecision(_msg: AgentDecisionMsg): void {
-    /* P3+ */
+  handleDecision(msg: AgentDecisionMsg): void {
+    void this.applyDecision(msg);
   }
+
+  private async applyDecision(msg: AgentDecisionMsg): Promise<void> {
+    const note = (s: string) =>
+      this.deps.send({
+        t: "agent-stream",
+        event: { t: "agent-text", turnId: msg.turnId, delta: `\n[insitu] ${s}` },
+      });
+
+    const accepted = this.pending.get(msg.turnId);
+    if (!accepted) {
+      note("nothing pending for this turn");
+      return;
+    }
+    this.pending.delete(msg.turnId); // decided — single-shot
+
+    if (msg.decision === "reject") {
+      note(`rejected${msg.reason ? `: ${msg.reason}` : ""} — no files written`);
+      return;
+    }
+    // NOTE: deliberately NOT gated on `this.busy`. The changeset was
+    // buffered when the turn completed; applying it is a pure FS op
+    // independent of whether the (read-only) agent child has finished
+    // draining stdout. `busy` only single-flights *turns*.
+
+    // Optional subset: approve only some files of the changeset.
+    const edits =
+      msg.files && msg.files.length
+        ? accepted.filter((e) => msg.files!.includes(e.file))
+        : accepted;
+    if (!edits.length) {
+      note("approved file set was empty");
+      return;
+    }
+
+    try {
+      // Checkpoint BEFORE the first byte is written (undo = P5).
+      const cp = await checkpoint(
+        this.deps.root,
+        edits.map((e) => e.file),
+      );
+      const res = applyEdits(this.deps.root, edits);
+      if (res.written.length) {
+        this.checkpoints.set(msg.turnId, cp);
+        this.deps.send({
+          t: "changeset-applied",
+          turnId: msg.turnId,
+          files: res.written,
+          checkpointRef: cp.ref,
+        });
+      }
+      if (res.failed.length) {
+        note(
+          `failed: ${res.failed
+            .map((f) => `${f.file} (${f.reason})`)
+            .join(", ")}`,
+        );
+      }
+    } catch (e) {
+      note(`apply failed: ${(e as Error).message}`);
+    }
+  }
+
   handleCancel(_msg: AgentCancelMsg): void {
     this.session?.cancel();
     this.busy = false;
   }
   handleUndo(_msg: AgentUndoMsg): void {
-    /* P5 */
+    /* P5: restore(this.deps.root, this.checkpoints.get(msg.turnId)) */
   }
 }

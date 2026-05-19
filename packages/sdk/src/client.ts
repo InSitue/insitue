@@ -33,6 +33,7 @@ export interface ClientEvents {
     turnId: string,
     files: Array<{ file: string; diff: string; bytes: number }>,
   ): void;
+  onApplied?(turnId: string, files: string[], checkpointRef: string): void;
 }
 
 export class CompanionClient {
@@ -89,6 +90,12 @@ export class CompanionClient {
           this.events.onAgentEvent?.(msg.event);
         } else if (msg.t === "changeset-proposed") {
           this.events.onChangeset?.(msg.turnId, msg.files);
+        } else if (msg.t === "changeset-applied") {
+          this.events.onApplied?.(
+            msg.turnId,
+            msg.files,
+            msg.checkpointRef,
+          );
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
@@ -140,6 +147,16 @@ export class CompanionClient {
 
   cancelTurn(turnId: string): void {
     this.ws?.send(JSON.stringify({ t: "agent-cancel", turnId }));
+  }
+
+  sendDecision(
+    turnId: string,
+    decision: "approve" | "reject",
+    files?: string[],
+  ): void {
+    this.ws?.send(
+      JSON.stringify({ t: "agent-decision", turnId, decision, files }),
+    );
   }
 
   dispose(): void {
