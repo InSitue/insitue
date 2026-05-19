@@ -11,11 +11,14 @@ import type {
   AgentTurnMsg,
   AgentUndoMsg,
   CaptureBundle,
+  ProposedEdit,
   ResolvedSource,
   ServerMessage,
 } from "@insitu/capture-core";
 import { ClaudeCodeProvider } from "./claude-code/provider.js";
 import type { AgentProvider, AgentSession } from "./provider.js";
+import { parseProposals, EDIT_START } from "./proposals.js";
+import { buildChangeset } from "../edit/gateway.js";
 
 export interface OrchestratorDeps {
   root: string;
@@ -97,6 +100,16 @@ export class AgentOrchestrator {
       return;
     }
     this.busy = true;
+    // Buffer the full text so proposals (which span many deltas) can be
+    // parsed at turn end; suppress the raw file dump from the live chat
+    // stream — only the explanation before the first sentinel streams.
+    let textBuf = "";
+    let forwarded = 0;
+    const collected: ProposedEdit[] = [];
+    const cleanText = () => {
+      const idx = textBuf.indexOf(EDIT_START);
+      return idx === -1 ? textBuf : textBuf.slice(0, idx);
+    };
     try {
       if (!this.session) this.session = await this.provider.startSession();
       await this.session.sendTurn(
@@ -105,7 +118,56 @@ export class AgentOrchestrator {
           resolved: stored.resolved,
           userMessage: msg.userMessage,
         },
-        (event) => this.deps.send({ t: "agent-stream", event }),
+        (event) => {
+          if (event.t === "agent-text") {
+            textBuf += event.delta;
+            const c = cleanText();
+            if (c.length > forwarded) {
+              this.deps.send({
+                t: "agent-stream",
+                event: {
+                  t: "agent-text",
+                  turnId: event.turnId,
+                  delta: c.slice(forwarded),
+                },
+              });
+              forwarded = c.length;
+            }
+            return;
+          }
+          if (event.t === "agent-tool-proposal") {
+            collected.push(event.edit); // future `sdk` transport path
+            return;
+          }
+          if (event.t === "agent-turn-complete") {
+            const edits = [...collected, ...parseProposals(textBuf)];
+            if (edits.length) {
+              const cs = buildChangeset(this.deps.root, edits);
+              if (cs.files.length) {
+                this.deps.send({
+                  t: "changeset-proposed",
+                  turnId: event.turnId,
+                  files: cs.files,
+                });
+              }
+              if (cs.skipped.length) {
+                this.deps.send({
+                  t: "agent-stream",
+                  event: {
+                    t: "agent-text",
+                    turnId: event.turnId,
+                    delta: `\n\n[insitu] skipped: ${cs.skipped
+                      .map((s) => `${s.file} (${s.reason})`)
+                      .join(", ")}`,
+                  },
+                });
+              }
+            }
+            this.deps.send({ t: "agent-stream", event });
+            return;
+          }
+          this.deps.send({ t: "agent-stream", event });
+        },
       );
     } catch (e) {
       fail("transport", (e as Error).message);

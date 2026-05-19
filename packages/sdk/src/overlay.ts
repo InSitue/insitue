@@ -31,6 +31,18 @@ function row(label: string, value: string) {
   ]);
 }
 
+function diffLines(diff: string) {
+  return diff.split("\n").map((ln) => {
+    let color = muted;
+    if (ln.startsWith("@@")) color = "#5fb3e0";
+    else if (ln.startsWith("+++") || ln.startsWith("---")) color = muted;
+    else if (ln.startsWith("+")) color = "#5fd18a";
+    else if (ln.startsWith("-")) color = "#ff7a7a";
+    else color = "#bfbfc6";
+    return h("div", { style: `color:${color};white-space:pre` }, ln || " ");
+  });
+}
+
 function App(props: { port: number }) {
   const [state, setState] = useState<ConnState>("idle");
   const [detail, setDetail] = useState("");
@@ -45,6 +57,9 @@ function App(props: { port: number }) {
   const [chatInput, setChatInput] = useState("");
   const [reply, setReply] = useState("");
   const [turnBusy, setTurnBusy] = useState(false);
+  const [changes, setChanges] = useState<
+    Array<{ file: string; diff: string; bytes: number }>
+  >([]);
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -73,6 +88,7 @@ function App(props: { port: number }) {
           setTurnBusy(false);
         }
       },
+      onChangeset: (_t, files) => setChanges(files),
     });
     setClient(c);
     void c.connect();
@@ -88,6 +104,8 @@ function App(props: { port: number }) {
       const b = await buildBundle(sel);
       setBundle(b);
       setResolved(null);
+      setReply("");
+      setChanges([]);
       setNote("resolving…");
       setOpen(true);
       client.submitCapture(b);
@@ -100,6 +118,7 @@ function App(props: { port: number }) {
     if (!client || !bundle || !chatInput.trim() || turnBusy) return;
     const turnId = `turn_${Date.now().toString(36)}`;
     setReply("");
+    setChanges([]);
     setTurnBusy(true);
     client.sendTurn(turnId, bundle.id, chatInput.trim());
   };
@@ -284,6 +303,47 @@ function App(props: { port: number }) {
                           },
                           reply,
                         )
+                      : null,
+                    changes.length
+                      ? h("div", { style: "margin-top:10px" }, [
+                          h(
+                            "div",
+                            {
+                              style: `color:#ff6b00;margin-bottom:4px;display:flex;justify-content:space-between`,
+                            },
+                            [
+                              h(
+                                "span",
+                                {},
+                                `PROPOSED CHANGES · ${changes.length} file${changes.length > 1 ? "s" : ""}`,
+                              ),
+                              h(
+                                "span",
+                                { style: `color:${muted}` },
+                                "dry-run · apply lands in P4",
+                              ),
+                            ],
+                          ),
+                          ...changes.map((c) =>
+                            h("div", { style: "margin:6px 0" }, [
+                              h(
+                                "div",
+                                {
+                                  style: `color:#ececef;margin-bottom:2px`,
+                                },
+                                `${c.file}  (${c.bytes}B)`,
+                              ),
+                              h(
+                                "div",
+                                {
+                                  style:
+                                    "overflow:auto;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:8px;max-height:240px;font-size:11px;line-height:1.45",
+                                },
+                                diffLines(c.diff),
+                              ),
+                            ]),
+                          ),
+                        ])
                       : null,
                   ],
                 ),

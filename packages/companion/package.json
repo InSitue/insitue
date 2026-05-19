@@ -10,8 +10,8 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsup src/cli.ts src/server.ts --format esm --dts --clean --external ws --external commander --external zod --external execa",
-    "dev": "tsup src/cli.ts src/server.ts --format esm --watch --external ws --external commander --external zod --external execa",
+    "build": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/edit/gateway.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff",
+    "dev": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/edit/gateway.ts --format esm --watch --external ws --external commander --external zod --external execa --external diff",
     "start": "node dist/cli.js",
     "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@insitu/capture-core": "workspace:*",
     "commander": "^12.1.0",
+    "diff": "^9.0.0",
     "execa": "^9.5.2",
     "ws": "^8.18.0",
     "zod": "^3.23.8"

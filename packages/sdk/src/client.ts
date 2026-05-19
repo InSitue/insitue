@@ -29,6 +29,10 @@ export interface ClientEvents {
   ): void;
   onAgentStatus?(s: AgentStatus): void;
   onAgentEvent?(e: AgentEvent): void;
+  onChangeset?(
+    turnId: string,
+    files: Array<{ file: string; diff: string; bytes: number }>,
+  ): void;
 }
 
 export class CompanionClient {
@@ -83,6 +87,8 @@ export class CompanionClient {
           });
         } else if (msg.t === "agent-stream") {
           this.events.onAgentEvent?.(msg.event);
+        } else if (msg.t === "changeset-proposed") {
+          this.events.onChangeset?.(msg.turnId, msg.files);
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
