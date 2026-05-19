@@ -25,12 +25,23 @@ Localhost-first. MIT. See the design/plan in
 
 Next: **M1** — element/region picker + DOM→source resolution + `CaptureBundle`.
 
-## Dev
+## Demo (one command)
 
 ```sh
 pnpm install
+pnpm demo          # builds, then runs the companion + React example together
+```
+
+Open <http://localhost:3100>, click **Select** in the InSitu pill, then
+click any element — the panel shows its real `file:line`, component
+stack, styles, screenshot and runtime. Ctrl+C stops both.
+
+## Dev
+
+```sh
 pnpm build
 pnpm test          # M0 security/handshake tests
+pnpm dev           # watch-build all packages
 ```
 
 ## Dogfooding into an existing app (manual, dev-only)
