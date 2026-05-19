@@ -28,7 +28,8 @@
     "STRIPE_SECRET_KEY",
     "STRIPE_WEBHOOK_SECRET",
     "RESEND_API_KEY",
-    "SENTRY_DSN"
+    "SENTRY_DSN",
+    "CRON_SECRET"
   ],
   "tasks": {
     "build": {
