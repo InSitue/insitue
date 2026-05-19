@@ -6,6 +6,7 @@
  * overlay chunk never ships in a prod bundle.
  */
 import { useEffect } from "react";
+import type { CaptureBundle, IssueDraft } from "@insitu/capture-core";
 
 export interface InSituProps {
   /** Companion loopback port (default 5747). */
@@ -30,5 +31,34 @@ export function InSitu({ port }: InSituProps): null {
       dispose?.();
     };
   }, [port]);
+  return null;
+}
+
+export interface InSituCaptureProps {
+  /** Override delivery (default: console + JSON download +
+   *  `window.__insitu_capture__`). */
+  onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
+}
+
+/**
+ * `<InSituCapture />` — the prod capture-only path (M4, validated not
+ * shipped). UNLIKE `<InSitu />` it does NOT bail in a production build:
+ * capture-only is exactly what prod runs (no companion to refuse). It
+ * never touches fs/agent/WS; the same bundle just flows to a sink.
+ */
+export function InSituCapture({ onCapture }: InSituCaptureProps): null {
+  useEffect(() => {
+    let active = true;
+    let dispose: (() => void) | undefined;
+    void import("./capture-only.js").then((m) => {
+      if (active) {
+        dispose = m.mountCaptureOnly(onCapture ? { onCapture } : {});
+      }
+    });
+    return () => {
+      active = false;
+      dispose?.();
+    };
+  }, [onCapture]);
   return null;
 }

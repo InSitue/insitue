@@ -17,6 +17,10 @@
       "types": "./dist/overlay.d.ts",
       "import": "./dist/overlay.js"
     },
+    "./capture-only": {
+      "types": "./dist/capture-only.d.ts",
+      "import": "./dist/capture-only.js"
+    },
     "./babel": {
       "types": "./dist/babel.d.ts",
       "import": "./dist/babel.js"

@@ -10,7 +10,12 @@ import { defineConfig } from "tsup";
  * already has React.
  */
 export default defineConfig({
-  entry: ["src/index.ts", "src/overlay.ts", "src/babel.ts"],
+  entry: [
+    "src/index.ts",
+    "src/overlay.ts",
+    "src/capture-only.ts",
+    "src/babel.ts",
+  ],
   format: ["esm"],
   dts: true,
   clean: true,

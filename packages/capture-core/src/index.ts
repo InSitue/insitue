@@ -114,6 +114,67 @@ export interface CaptureSink {
   submit(bundle: CaptureBundle): Promise<void>;
 }
 
+/* ── Prod capture-only seam (M4 — validated, not shipped) ──
+ * The future hosted offering rides this exact `CaptureSink` swap: no
+ * companion, no agent, no fs — the SAME `CaptureBundle` becomes a
+ * source-aware task. `toIssueDraft` is pure (no DOM/fetch/transport)
+ * so capture-core stays the dependency-free seam; delivery (gh/Linear/
+ * Jira/HTTP/file) is the consumer's choice, never capture-core's. */
+
+export interface IssueDraft {
+  title: string;
+  /** Markdown summary a human/tracker can read at a glance. */
+  body: string;
+  /** Full bundle, attached verbatim for the agent-ready future. */
+  bundle: CaptureBundle;
+}
+
+/** Turn a bundle into a tracker-ready draft. Source is included when
+ *  present (fiber/attribute resolved it client-side) and degrades
+ *  gracefully to the always-present selector when it isn't. */
+export function toIssueDraft(bundle: CaptureBundle): IssueDraft {
+  const t = bundle.target;
+  const where =
+    t?.source
+      ? `\`${t.source.file}:${t.source.line}\` (${t.confidence})`
+      : t
+        ? `\`${t.selector}\` (selector-only — no source resolver)`
+        : "(empty selection)";
+  const stack =
+    t?.componentStack.map((c) => c.name).join(" < ") || "(none)";
+  const errs = bundle.runtime.errors.length;
+  const title =
+    `[InSitu] ${t?.componentStack[0]?.name ?? t?.selector ?? "selection"}` +
+    ` on ${bundle.runtime.route ?? new URL(bundle.runtime.url).pathname}`;
+  const body = [
+    `**Where:** ${where}`,
+    `**Components:** ${stack}`,
+    `**URL:** ${bundle.runtime.url}`,
+    `**Viewport:** ${bundle.viewport.w}×${bundle.viewport.h}` +
+      `${bundle.viewport.breakpoint ? ` (${bundle.viewport.breakpoint})` : ""}`,
+    `**Tailwind:** ${bundle.tailwindClasses.join(" ") || "—"}`,
+    `**Runtime:** ${bundle.runtime.console.length} log · ` +
+      `${bundle.runtime.network.length} net · ${errs} err`,
+    `**Screenshot:** ${bundle.screenshot ? "attached" : "—"}`,
+    bundle.userNote ? `\n> ${bundle.userNote}` : "",
+    `\n_Captured ${bundle.createdAt} · schema v${bundle.schemaVersion}_`,
+  ].join("\n");
+  return { title, body, bundle };
+}
+
+/** A CaptureSink that produces an `IssueDraft` and hands it to a
+ *  caller-supplied delivery fn (download/gh/HTTP — not our concern).
+ *  Same bundle, different sink: this is the local→prod door. */
+export class IssueTrackerSink implements CaptureSink {
+  readonly kind = "issue-tracker";
+  constructor(
+    private readonly deliver: (draft: IssueDraft) => void | Promise<void>,
+  ) {}
+  async submit(bundle: CaptureBundle): Promise<void> {
+    await this.deliver(toIssueDraft(bundle));
+  }
+}
+
 /* ── WS envelope (pure type definitions only; no transport here) ──
  * Shared so the SDK client and the companion server agree on shape.
  * The companion zod-validates these at the trust boundary. */
