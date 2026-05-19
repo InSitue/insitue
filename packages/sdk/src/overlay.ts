@@ -1,10 +1,14 @@
 /**
  * The overlay: Preact in a Shadow DOM (style-isolated from the host).
- * M1 — connect, pick a region/element, build a CaptureBundle, submit
- * it, and render the bundle + the companion's resolved source span.
+ *
+ * IA (M5 redesign): a compact header (target one-liner + collapsible
+ * Context + settings), a focal Conversation area for the active turn,
+ * and a Session timeline that completed turns file into — each
+ * revisitable / continuable / undoable. Auto-apply is an opt-in,
+ * in-memory setting (off by default; changes stay checkpointed).
  */
 import { h, render } from "preact";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import type {
   CaptureBundle,
   ResolvedSource,
@@ -19,6 +23,20 @@ export interface InSituOptions {
   port?: number;
 }
 
+type Change = { file: string; diff: string; bytes: number };
+type TurnStatus = "applied" | "undone" | "committed";
+interface HistoryEntry {
+  turnId: string;
+  prompt: string;
+  sel: SelectionInput | null;
+  files: string[];
+  checkpointRef: string;
+  diff: Change[];
+  status: TurnStatus;
+  note: string;
+  postError: boolean;
+}
+
 const DOT: Record<ConnState, string> = {
   idle: "#888",
   connecting: "#e0a30c",
@@ -26,7 +44,12 @@ const DOT: Record<ConnState, string> = {
   error: "#ff6b6b",
 };
 const muted = "#8a8a93";
+const accent = "#ff6b00";
 const mono = "12px ui-monospace, SFMono-Regular, Menlo, monospace";
+const btn =
+  "font:inherit;color:#ff6b00;background:transparent;border:1px solid #2e2e3c;border-radius:4px;padding:3px 8px;cursor:pointer";
+const card =
+  "background:#0b0b0d;border:1px solid #232330;border-radius:4px";
 
 function row(label: string, value: string) {
   return h("div", { style: "display:flex;gap:8px;margin:2px 0" }, [
@@ -47,36 +70,66 @@ function diffLines(diff: string) {
   });
 }
 
+function diffBlock(changes: Change[]) {
+  return changes.map((c) =>
+    h("div", { style: "margin:6px 0" }, [
+      h(
+        "div",
+        { style: "color:#ececef;margin-bottom:2px" },
+        `${c.file}  (${c.bytes}B)`,
+      ),
+      h(
+        "div",
+        {
+          style: `overflow:auto;${card};padding:8px;max-height:200px;font-size:11px;line-height:1.45`,
+        },
+        diffLines(c.diff),
+      ),
+    ]),
+  );
+}
+
 function App(props: { port: number }) {
   const [state, setState] = useState<ConnState>("idle");
   const [detail, setDetail] = useState("");
   const [client, setClient] = useState<CompanionClient | null>(null);
   const [bundle, setBundle] = useState<CaptureBundle | null>(null);
   const [resolved, setResolved] = useState<ResolvedSource | null>(null);
-  const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [showCtx, setShowCtx] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [autoApply, setAutoApply] = useState(false);
   const [agentReady, setAgentReady] = useState<boolean | null>(null);
   const [agentNote, setAgentNote] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [reply, setReply] = useState("");
   const [turnBusy, setTurnBusy] = useState(false);
-  const [changes, setChanges] = useState<
-    Array<{ file: string; diff: string; bytes: number }>
-  >([]);
+  const [thinking, setThinking] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const [changes, setChanges] = useState<Change[]>([]);
   const [changeTurnId, setChangeTurnId] = useState("");
-  const [applied, setApplied] = useState("");
-  const [appliedTurnId, setAppliedTurnId] = useState("");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [rejectReason, setRejectReason] = useState("");
-  const [sessionN, setSessionN] = useState(0);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [revisitId, setRevisitId] = useState("");
   const [commitMsg, setCommitMsg] = useState("");
   const [sessionNote, setSessionNote] = useState("");
   const [lastSel, setLastSel] = useState<SelectionInput | null>(null);
-  const [loopNote, setLoopNote] = useState("");
-  const [thinking, setThinking] = useState("");
-  const [elapsed, setElapsed] = useState(0);
-  const [postApplyError, setPostApplyError] = useState(false);
+  const [activeTurn, setActiveTurn] = useState<{
+    turnId: string;
+    prompt: string;
+    sel: SelectionInput | null;
+  } | null>(null);
+
+  // CompanionClient callbacks are bound once; mirror the state they
+  // must read at fire-time into refs.
+  const autoApplyRef = useRef(false);
+  const changesRef = useRef<Change[]>([]);
+  const activeTurnRef = useRef<typeof activeTurn>(null);
+  autoApplyRef.current = autoApply;
+  changesRef.current = changes;
+  activeTurnRef.current = activeTurn;
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -85,10 +138,7 @@ function App(props: { port: number }) {
         setState(s);
         if (d !== undefined) setDetail(d);
       },
-      onResolved: (_id, r, n) => {
-        setResolved(r);
-        setNote(n);
-      },
+      onResolved: (_id, r) => setResolved(r),
       onAgentStatus: (s) => {
         setAgentReady(s.ready);
         setAgentNote(
@@ -117,59 +167,80 @@ function App(props: { port: number }) {
         setChanges(files);
         setPicked(Object.fromEntries(files.map((f) => [f.file, true])));
         setRejectReason("");
-        setApplied("");
-        setAppliedTurnId("");
+        if (autoApplyRef.current) {
+          setReply(
+            (r) => r + `\n[insitu] auto-apply on — writing without review`,
+          );
+          c.sendDecision(turnId, "approve");
+        }
       },
       onApplied: (turnId, files, ref) => {
-        setAppliedTurnId(turnId);
-        setApplied(
-          `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR reloading…`,
-        );
+        const at = activeTurnRef.current;
+        const entry: HistoryEntry = {
+          turnId,
+          prompt:
+            at && at.turnId === turnId ? at.prompt : "(applied change)",
+          sel: at && at.turnId === turnId ? at.sel : null,
+          files,
+          checkpointRef: ref,
+          diff: changesRef.current,
+          status: "applied",
+          note: "HMR reloading…",
+          postError: false,
+        };
+        setHistory((hs) => [entry, ...hs]);
+        // clear the active conversation for the next task
         setChanges([]);
-        setSessionN((n) => n + 1);
+        setReply("");
+        setChangeTurnId("");
+        setChatInput("");
+        setActiveTurn(null);
         setSessionNote("");
-        setPostApplyError(false);
-        // Real HMR-settle signal: watch for the host throwing in the
-        // ~5s after the write. No new errors → say it settled clean;
-        // a new error → flag it (the Re-capture loop is one click).
+        // Real HMR-settle signal: watch the host for ~5s post-write.
         const base = runtimeErrorCount();
         let ticks = 0;
         const iv = setInterval(() => {
           ticks++;
-          if (runtimeErrorCount() > base) {
-            setPostApplyError(true);
-            setApplied(
-              `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — ⚠ host threw after HMR`,
-            );
-            clearInterval(iv);
-          } else if (ticks >= 10) {
-            setApplied(
-              `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — HMR settled clean; re-select to verify`,
+          const threw = runtimeErrorCount() > base;
+          if (threw || ticks >= 10) {
+            setHistory((hs) =>
+              hs.map((e) =>
+                e.turnId === turnId
+                  ? {
+                      ...e,
+                      note: threw
+                        ? "⚠ host threw after HMR"
+                        : "HMR settled clean",
+                      postError: threw,
+                    }
+                  : e,
+              ),
             );
             clearInterval(iv);
           }
         }, 500);
       },
-      onUndone: (_t, restored) => {
-        setAppliedTurnId("");
-        setApplied(
-          `undone — restored ${restored.length} file${restored.length > 1 ? "s" : ""}; host HMR should revert`,
+      onUndone: (turnId) =>
+        setHistory((hs) =>
+          hs.map((e) =>
+            e.turnId === turnId
+              ? { ...e, status: "undone", note: "undone — HMR reverting" }
+              : e,
+          ),
+        ),
+      onSessionUndone: () =>
+        setHistory((hs) =>
+          hs.map((e) =>
+            e.status === "applied" ? { ...e, status: "undone" } : e,
+          ),
+        ),
+      onSessionCommitted: (commit) => {
+        setHistory((hs) =>
+          hs.map((e) =>
+            e.status === "applied" ? { ...e, status: "committed" } : e,
+          ),
         );
-        setSessionN((n) => Math.max(0, n - 1));
-      },
-      onSessionUndone: (restored) => {
-        setSessionN(0);
-        setAppliedTurnId("");
-        setApplied("");
-        setSessionNote(
-          `session undone — restored ${restored.length} file${restored.length > 1 ? "s" : ""}; host HMR should revert`,
-        );
-      },
-      onSessionCommitted: (commit, files) => {
-        setSessionN(0);
-        setSessionNote(
-          `committed ${files.length} file${files.length > 1 ? "s" : ""} as ${commit} (local only — not pushed)`,
-        );
+        setSessionNote(`committed as ${commit} (local only — not pushed)`);
       },
     });
     setClient(c);
@@ -177,7 +248,6 @@ function App(props: { port: number }) {
     return () => c.dispose();
   }, [props.port]);
 
-  // Live elapsed counter while a turn runs (streaming feedback).
   useEffect(() => {
     if (!turnBusy) {
       setElapsed(0);
@@ -191,24 +261,26 @@ function App(props: { port: number }) {
     return () => clearInterval(iv);
   }, [turnBusy]);
 
+  const captureSel = async (sel: SelectionInput) => {
+    setLastSel(sel);
+    const b = await buildBundle(sel);
+    setBundle(b);
+    setResolved(null);
+    setReply("");
+    setChanges([]);
+    setRevisitId("");
+    setOpen(true);
+    setShowCtx(false);
+    client?.submitCapture(b);
+    return b;
+  };
+
   const pick = async (mode: "element" | "rect") => {
     if (!client || state !== "connected") return;
     setBusy(true);
     try {
       const sel = await beginPick(mode);
-      if (!sel) return;
-      setLastSel(sel);
-      const b = await buildBundle(sel);
-      setBundle(b);
-      setResolved(null);
-      setReply("");
-      setChanges([]);
-      setApplied("");
-      setAppliedTurnId("");
-      setLoopNote("");
-      setNote("resolving…");
-      setOpen(true);
-      client.submitCapture(b);
+      if (sel) await captureSel(sel);
     } finally {
       setBusy(false);
     }
@@ -216,38 +288,48 @@ function App(props: { port: number }) {
 
   const sendChat = () => {
     if (!client || !bundle || !chatInput.trim() || turnBusy) return;
-    const turnId = `turn_${Date.now().toString(36)}`;
+    // The transport keys every agent event/changeset by the BUNDLE id,
+    // so the active-turn identity must be the bundle id too — otherwise
+    // onApplied can't attribute the prompt/selection to the entry.
+    const turnId = bundle.id;
+    setActiveTurn({ turnId, prompt: chatInput.trim(), sel: lastSel });
     setReply("");
     setChanges([]);
-    setApplied("");
+    setRevisitId("");
     setTurnBusy(true);
     client.sendTurn(turnId, bundle.id, chatInput.trim());
   };
 
-  // Compile/runtime-error feedback loop: after an apply + HMR, the host
-  // may now be throwing. Re-capture the SAME selection (fresh
-  // runtime.errors), and if errors are present, auto-send a follow-up
-  // turn so the agent fixes its own change — the fix still goes through
-  // the normal propose → diff → approve gate.
-  const recaptureContinue = async () => {
-    if (!client || !lastSel || busy || turnBusy) return;
+  // Continue from a finished turn: re-establish its selection as the
+  // live context so the next instruction is grounded there.
+  const continueFrom = async (e: HistoryEntry) => {
+    if (!client || !e.sel || busy || turnBusy) return;
     setBusy(true);
     try {
-      const b = await buildBundle(lastSel);
-      setBundle(b);
-      setResolved(null);
-      setNote("resolving…");
-      setApplied("");
-      setAppliedTurnId("");
-      client.submitCapture(b);
+      await captureSel(e.sel);
+      setChatInput("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Error feedback loop: re-capture an entry's selection and, if the
+  // host is now throwing, ask the agent to fix its own change.
+  const recaptureFix = async (e: HistoryEntry) => {
+    if (!client || !e.sel || busy || turnBusy) return;
+    setBusy(true);
+    try {
+      const b = await captureSel(e.sel);
       const errs = b.runtime.errors.length;
       if (errs > 0) {
-        const turnId = `turn_${Date.now().toString(36)}`;
+        const turnId = b.id;
+        setActiveTurn({
+          turnId,
+          prompt: "fix the runtime error from the previous change",
+          sel: e.sel,
+        });
         setReply("");
         setChanges([]);
-        setLoopNote(
-          `re-captured: ${errs} runtime error${errs > 1 ? "s" : ""} — asking the agent to fix its change`,
-        );
         setTurnBusy(true);
         client.sendTurn(
           turnId,
@@ -255,17 +337,40 @@ function App(props: { port: number }) {
           "Your previous edit was applied but the running app now reports the runtime errors shown in the context above. Diagnose the cause and propose a corrected edit.",
         );
       } else {
-        setLoopNote("re-captured — no runtime errors detected");
+        setReply("[insitu] re-captured — no runtime errors detected");
       }
     } finally {
       setBusy(false);
     }
   };
 
+  const approve = () => {
+    const chosen = changes.map((c) => c.file).filter((f) => picked[f] !== false);
+    client?.sendDecision(
+      changeTurnId,
+      "approve",
+      chosen.length === changes.length ? undefined : chosen,
+    );
+  };
+  const reject = () => {
+    client?.sendDecision(
+      changeTurnId,
+      "reject",
+      undefined,
+      rejectReason.trim() || undefined,
+    );
+    setChanges([]);
+  };
+
+  const t = bundle?.target;
+  const targetSummary = t
+    ? `${t.componentStack[0]?.name ?? t.selector.split(">").pop()?.trim() ?? "selection"} · ${t.confidence}`
+    : "no selection";
+  const appliedCount = history.filter((e) => e.status === "applied").length;
+  const revisit = history.find((e) => e.turnId === revisitId) || null;
+
   const pill = {
     position: "fixed",
-    // Bottom-RIGHT: Next.js (and many frameworks) park their dev
-    // indicator bottom-left, so this avoids the overlap by default.
     bottom: "16px",
     right: "16px",
     zIndex: 2147483000,
@@ -280,10 +385,435 @@ function App(props: { port: number }) {
     borderRadius: "6px",
     boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
   };
-  const btn =
-    "font:inherit;color:#ff6b00;background:transparent;border:1px solid #2e2e3c;border-radius:4px;padding:3px 8px;cursor:pointer";
 
-  const t = bundle?.target;
+  // ── Context (collapsed by default) ──
+  const ctx =
+    bundle && showCtx
+      ? h("div", { style: "margin:8px 0;color:#bfbfc6" }, [
+          row("confidence", t?.confidence ?? "—"),
+          row("selector", t?.selector ?? "—"),
+          row(
+            "components",
+            t?.componentStack.map((c) => c.name).join(" < ") || "—",
+          ),
+          row("tailwind", bundle.tailwindClasses.join(" ") || "—"),
+          row("styles", `${Object.keys(bundle.computedStyles).length} props`),
+          row(
+            "runtime",
+            `${bundle.runtime.console.length} log · ${bundle.runtime.network.length} net · ${bundle.runtime.errors.length} err`,
+          ),
+          row(
+            "screenshot",
+            bundle.screenshot
+              ? "captured"
+              : bundle.screenshotUnavailable
+                ? `unavailable — ${bundle.screenshotUnavailable}`
+                : "—",
+          ),
+          bundle.screenshot
+            ? h("img", {
+                src: bundle.screenshot.dataUrl,
+                style: `max-width:100%;margin:8px 0;${card}`,
+              })
+            : null,
+          resolved
+            ? h(
+                "pre",
+                {
+                  style: `white-space:pre;overflow:auto;${card};padding:10px;margin:6px 0 0;color:#bfbfc6;max-height:160px`,
+                },
+                `${resolved.file}:${resolved.line}\n\n${resolved.snippet}`,
+              )
+            : null,
+        ])
+      : null;
+
+  // ── Conversation (active turn) OR a revisited diff ──
+  const conversation = revisit
+    ? h(
+        "div",
+        { style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px` },
+        [
+          h(
+            "div",
+            {
+              style: `color:${accent};margin-bottom:6px;display:flex;justify-content:space-between;align-items:center`,
+            },
+            [
+              h("span", {}, `REVISIT · ${revisit.prompt}`.slice(0, 52)),
+              h(
+                "button",
+                { style: btn, onClick: () => setRevisitId("") },
+                "close",
+              ),
+            ],
+          ),
+          h(
+            "div",
+            { style: `color:${muted};margin-bottom:6px` },
+            `${revisit.status} · ${revisit.files.join(", ")} · ${revisit.checkpointRef}`,
+          ),
+          ...diffBlock(revisit.diff),
+        ],
+      )
+    : bundle
+      ? h(
+          "div",
+          {
+            style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
+          },
+          [
+            h("div", { style: `color:${accent};margin-bottom:6px` }, "ASK"),
+            agentReady === false
+              ? h(
+                  "div",
+                  { style: "color:#ff6b6b;margin-bottom:6px" },
+                  agentNote,
+                )
+              : agentNote
+                ? h(
+                    "div",
+                    { style: `color:${muted};margin-bottom:6px` },
+                    agentNote,
+                  )
+                : null,
+            h("textarea", {
+              value: chatInput,
+              placeholder:
+                "what does this do? · make the padding bigger · fix this bug",
+              rows: 3,
+              onInput: (ev: Event) =>
+                setChatInput((ev.target as HTMLTextAreaElement).value),
+              onKeyDown: (ev: KeyboardEvent) => {
+                if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter")
+                  sendChat();
+              },
+              style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:8px;resize:vertical`,
+            }),
+            h(
+              "div",
+              {
+                style:
+                  "display:flex;gap:8px;align-items:center;margin-top:6px",
+              },
+              [
+                h(
+                  "button",
+                  {
+                    style: btn,
+                    disabled:
+                      turnBusy || !chatInput.trim() || agentReady === false,
+                    onClick: sendChat,
+                  },
+                  turnBusy ? `…working ${elapsed}s` : "Send (⌘↵)",
+                ),
+                turnBusy
+                  ? h(
+                      "button",
+                      {
+                        style: btn,
+                        onClick: () => {
+                          client?.cancelTurn("cur");
+                          setTurnBusy(false);
+                        },
+                      },
+                      "stop",
+                    )
+                  : null,
+                autoApply
+                  ? h(
+                      "span",
+                      { style: `color:${accent}` },
+                      "auto-apply ON",
+                    )
+                  : null,
+              ],
+            ),
+            turnBusy && thinking
+              ? h(
+                  "div",
+                  {
+                    style: `color:${muted};font-style:italic;margin:6px 0 0;white-space:pre-wrap;word-break:break-word`,
+                  },
+                  `💭 ${thinking}`,
+                )
+              : null,
+            reply
+              ? h(
+                  "pre",
+                  {
+                    style: `white-space:pre-wrap;word-break:break-word;${card};padding:10px;margin:8px 0 0;color:#ececef;max-height:220px;overflow:auto`,
+                  },
+                  reply,
+                )
+              : null,
+            changes.length
+              ? h("div", { style: "margin-top:10px" }, [
+                  h(
+                    "div",
+                    {
+                      style: `color:${accent};margin-bottom:4px;display:flex;justify-content:space-between;align-items:center`,
+                    },
+                    [
+                      h(
+                        "span",
+                        {},
+                        `PROPOSED · ${changes.length} file${changes.length > 1 ? "s" : ""}`,
+                      ),
+                      h(
+                        "span",
+                        { style: "display:flex;gap:6px;align-items:center" },
+                        [
+                          h(
+                            "button",
+                            { style: btn, onClick: approve },
+                            "Approve & write",
+                          ),
+                          h(
+                            "button",
+                            { style: `${btn};color:${muted}`, onClick: reject },
+                            "Reject",
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  h("input", {
+                    value: rejectReason,
+                    placeholder: "reject reason (optional) — fed to the agent",
+                    onInput: (ev: Event) =>
+                      setRejectReason((ev.target as HTMLInputElement).value),
+                    style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:5px 7px;margin:4px 0 6px`,
+                  }),
+                  ...changes.map((c) =>
+                    h("div", { style: "margin:6px 0" }, [
+                      h(
+                        "label",
+                        {
+                          style:
+                            "color:#ececef;margin-bottom:2px;display:flex;gap:6px;align-items:center;cursor:pointer",
+                        },
+                        [
+                          h("input", {
+                            type: "checkbox",
+                            checked: picked[c.file] !== false,
+                            onChange: (ev: Event) =>
+                              setPicked((p) => ({
+                                ...p,
+                                [c.file]: (ev.target as HTMLInputElement)
+                                  .checked,
+                              })),
+                          }),
+                          h("span", {}, `${c.file}  (${c.bytes}B)`),
+                        ],
+                      ),
+                      h(
+                        "div",
+                        {
+                          style: `overflow:auto;${card};padding:8px;max-height:200px;font-size:11px;line-height:1.45`,
+                        },
+                        diffLines(c.diff),
+                      ),
+                    ]),
+                  ),
+                ])
+              : null,
+          ],
+        )
+      : null;
+
+  // ── Session timeline ──
+  const timeline = history.length
+    ? h(
+        "div",
+        { style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px` },
+        [
+          h(
+            "div",
+            {
+              style: `color:${accent};margin-bottom:6px;display:flex;justify-content:space-between;align-items:center`,
+            },
+            [
+              h("span", {}, `SESSION · ${appliedCount} live`),
+              appliedCount > 0
+                ? h(
+                    "button",
+                    {
+                      style: `${btn};color:${muted}`,
+                      onClick: () => client?.sendUndoSession(),
+                    },
+                    "Undo all",
+                  )
+                : null,
+            ],
+          ),
+          ...history.map((e) => {
+            const glyph =
+              e.status === "applied"
+                ? "✓"
+                : e.status === "committed"
+                  ? "◆"
+                  : "⤺";
+            const dim = e.status !== "applied";
+            return h(
+              "div",
+              {
+                style: `${card};padding:6px 8px;margin:4px 0;${dim ? "opacity:0.6;" : ""}`,
+              },
+              [
+                h(
+                  "div",
+                  {
+                    style:
+                      "display:flex;justify-content:space-between;gap:8px;align-items:center",
+                  },
+                  [
+                    h(
+                      "span",
+                      {
+                        style:
+                          "color:#ececef;overflow:hidden;text-overflow:ellipsis;white-space:nowrap",
+                      },
+                      `${glyph} ${e.prompt}`,
+                    ),
+                    h(
+                      "span",
+                      { style: "display:flex;gap:6px;flex:none" },
+                      [
+                        h(
+                          "button",
+                          {
+                            style: btn,
+                            onClick: () => setRevisitId(e.turnId),
+                          },
+                          "Revisit",
+                        ),
+                        e.sel
+                          ? h(
+                              "button",
+                              {
+                                style: btn,
+                                onClick: () => void continueFrom(e),
+                              },
+                              "Continue",
+                            )
+                          : null,
+                        e.status === "applied"
+                          ? h(
+                              "button",
+                              {
+                                style: btn,
+                                onClick: () => client?.sendUndo(e.turnId),
+                              },
+                              "Undo",
+                            )
+                          : null,
+                      ],
+                    ),
+                  ],
+                ),
+                h(
+                  "div",
+                  { style: `color:${muted};margin-top:3px` },
+                  `${e.files.join(", ")} · ${e.checkpointRef}`,
+                ),
+                e.note
+                  ? h(
+                      "div",
+                      {
+                        style: `margin-top:3px;color:${e.postError ? "#ff7a7a" : "#5fd18a"};display:flex;justify-content:space-between;align-items:center`,
+                      },
+                      [
+                        h("span", {}, e.note),
+                        e.postError && e.sel
+                          ? h(
+                              "button",
+                              {
+                                style: `${btn};color:#0f0f12;background:${accent};border-color:${accent}`,
+                                onClick: () => void recaptureFix(e),
+                              },
+                              "⚠ Re-capture & fix",
+                            )
+                          : null,
+                      ],
+                    )
+                  : null,
+              ],
+            );
+          }),
+          appliedCount > 0
+            ? h(
+                "div",
+                {
+                  style:
+                    "display:flex;gap:6px;align-items:center;margin-top:6px",
+                },
+                [
+                  h("input", {
+                    value: commitMsg,
+                    placeholder: "commit message (optional)",
+                    onInput: (ev: Event) =>
+                      setCommitMsg((ev.target as HTMLInputElement).value),
+                    style: `flex:1;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:5px 7px`,
+                  }),
+                  h(
+                    "button",
+                    {
+                      style: btn,
+                      onClick: () =>
+                        client?.sendCommitSession(
+                          commitMsg.trim() || undefined,
+                        ),
+                    },
+                    "Commit (local)",
+                  ),
+                ],
+              )
+            : null,
+          sessionNote
+            ? h(
+                "div",
+                { style: "color:#5fd18a;margin-top:6px" },
+                sessionNote,
+              )
+            : null,
+        ],
+      )
+    : null;
+
+  // ── Settings popover ──
+  const settings = showSettings
+    ? h(
+        "div",
+        {
+          style: `${card};padding:10px;margin:8px 0`,
+        },
+        [
+          h(
+            "label",
+            {
+              style:
+                "display:flex;gap:8px;align-items:center;cursor:pointer;color:#ececef",
+            },
+            [
+              h("input", {
+                type: "checkbox",
+                checked: autoApply,
+                onChange: (ev: Event) =>
+                  setAutoApply((ev.target as HTMLInputElement).checked),
+              }),
+              h("span", {}, "Auto-apply (skip review)"),
+            ],
+          ),
+          h(
+            "div",
+            { style: `color:${muted};margin-top:4px` },
+            "Writes proposed changes immediately. Still checkpointed & undoable; no manual gate. Resets on reload.",
+          ),
+        ],
+      )
+    : null;
+
   const panel = open
     ? h(
         "div",
@@ -293,7 +823,7 @@ function App(props: { port: number }) {
             bottom: "64px",
             right: "16px",
             width: "440px",
-            maxHeight: "70vh",
+            maxHeight: "76vh",
             overflow: "auto",
             zIndex: 2147483000,
             font: mono,
@@ -301,417 +831,64 @@ function App(props: { port: number }) {
             background: "rgba(15,15,18,0.97)",
             border: "1px solid #2e2e3c",
             borderRadius: "8px",
-            padding: "14px 16px",
+            padding: "12px 14px",
             boxShadow: "0 10px 36px rgba(0,0,0,0.55)",
           },
         },
         [
+          // header: target one-liner + details/settings/close
           h(
             "div",
-            { style: "display:flex;justify-content:space-between;margin-bottom:8px" },
+            {
+              style:
+                "display:flex;justify-content:space-between;align-items:center;gap:8px",
+            },
             [
-              h("strong", { style: "color:#ff6b00;letter-spacing:0.08em" }, "CAPTURE"),
               h(
-                "button",
-                { style: btn, onClick: () => setOpen(false) },
-                "close",
+                "span",
+                {
+                  style: `color:${accent};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,
+                },
+                targetSummary,
               ),
-            ],
-          ),
-          bundle
-            ? h("div", {}, [
-                row("confidence", t?.confidence ?? "—"),
-                row("selector", t?.selector ?? "—"),
-                row(
-                  "components",
-                  t?.componentStack.map((c) => c.name).join(" < ") || "—",
-                ),
-                row("tailwind", bundle.tailwindClasses.join(" ") || "—"),
-                row(
-                  "styles",
-                  `${Object.keys(bundle.computedStyles).length} props`,
-                ),
-                row(
-                  "runtime",
-                  `${bundle.runtime.console.length} log · ${bundle.runtime.network.length} net · ${bundle.runtime.errors.length} err`,
-                ),
-                row("screenshot", bundle.screenshot ? "captured" : "—"),
-                bundle.screenshot
-                  ? h("img", {
-                      src: bundle.screenshot.dataUrl,
-                      style:
-                        "max-width:100%;margin:8px 0;border:1px solid #2e2e3c;border-radius:4px",
-                    })
-                  : null,
-                h(
-                  "div",
-                  { style: `color:${muted};margin:8px 0 4px` },
-                  note,
-                ),
-                resolved
+              h("span", { style: "display:flex;gap:6px;flex:none" }, [
+                bundle
                   ? h(
-                      "pre",
+                      "button",
                       {
-                        style:
-                          "white-space:pre;overflow:auto;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:10px;margin:0;color:#bfbfc6;max-height:180px",
+                        style: btn,
+                        onClick: () => setShowCtx((v) => !v),
                       },
-                      `${resolved.file}:${resolved.line}\n\n${resolved.snippet}`,
+                      showCtx ? "details ▾" : "details ▸",
                     )
                   : null,
                 h(
-                  "div",
+                  "button",
                   {
-                    style: `margin-top:12px;border-top:1px solid #232330;padding-top:10px`,
+                    style: btn,
+                    onClick: () => setShowSettings((v) => !v),
                   },
-                  [
-                    h(
-                      "div",
-                      { style: `color:#ff6b00;margin-bottom:6px` },
-                      "ASK IN SITU",
-                    ),
-                    agentReady === false
-                      ? h(
-                          "div",
-                          { style: `color:#ff6b6b;margin-bottom:6px` },
-                          agentNote,
-                        )
-                      : agentNote
-                        ? h(
-                            "div",
-                            { style: `color:${muted};margin-bottom:6px` },
-                            agentNote,
-                          )
-                        : null,
-                    h("textarea", {
-                      value: chatInput,
-                      placeholder:
-                        "e.g. what does this component do? / how would I make the padding bigger?",
-                      rows: 3,
-                      onInput: (ev: Event) =>
-                        setChatInput(
-                          (ev.target as HTMLTextAreaElement).value,
-                        ),
-                      onKeyDown: (ev: KeyboardEvent) => {
-                        if (
-                          (ev.metaKey || ev.ctrlKey) &&
-                          ev.key === "Enter"
-                        )
-                          sendChat();
-                      },
-                      style:
-                        "width:100%;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:8px;resize:vertical",
-                    }),
-                    h(
-                      "div",
-                      {
-                        style:
-                          "display:flex;gap:8px;align-items:center;margin-top:6px",
-                      },
-                      [
-                        h(
-                          "button",
-                          {
-                            style: btn,
-                            disabled:
-                              turnBusy ||
-                              !chatInput.trim() ||
-                              agentReady === false,
-                            onClick: sendChat,
-                          },
-                          turnBusy
-                            ? `…working ${elapsed}s`
-                            : "Send (⌘↵)",
-                        ),
-                        turnBusy
-                          ? h(
-                              "button",
-                              {
-                                style: btn,
-                                onClick: () => {
-                                  client?.cancelTurn("cur");
-                                  setTurnBusy(false);
-                                },
-                              },
-                              "stop",
-                            )
-                          : null,
-                      ],
-                    ),
-                    turnBusy && thinking
-                      ? h(
-                          "div",
-                          {
-                            style: `color:${muted};font-style:italic;margin:6px 0 0;white-space:pre-wrap;word-break:break-word`,
-                          },
-                          `💭 ${thinking}`,
-                        )
-                      : null,
-                    turnBusy && !reply && !thinking
-                      ? h(
-                          "div",
-                          { style: `color:${muted};margin:6px 0 0` },
-                          `…working ${elapsed}s`,
-                        )
-                      : null,
-                    reply
-                      ? h(
-                          "pre",
-                          {
-                            style:
-                              "white-space:pre-wrap;word-break:break-word;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:10px;margin:8px 0 0;color:#ececef;max-height:240px;overflow:auto",
-                          },
-                          reply,
-                        )
-                      : null,
-                    changes.length
-                      ? h("div", { style: "margin-top:10px" }, [
-                          h(
-                            "div",
-                            {
-                              style: `color:#ff6b00;margin-bottom:4px;display:flex;justify-content:space-between`,
-                            },
-                            [
-                              h(
-                                "span",
-                                {},
-                                `PROPOSED CHANGES · ${changes.length} file${changes.length > 1 ? "s" : ""}`,
-                              ),
-                              h(
-                                "span",
-                                {
-                                  style:
-                                    "display:flex;gap:6px;align-items:center",
-                                },
-                                [
-                                  h(
-                                    "button",
-                                    {
-                                      style: btn,
-                                      onClick: () => {
-                                        const chosen = changes
-                                          .map((c) => c.file)
-                                          .filter((f) => picked[f] !== false);
-                                        client?.sendDecision(
-                                          changeTurnId,
-                                          "approve",
-                                          chosen.length === changes.length
-                                            ? undefined
-                                            : chosen,
-                                        );
-                                      },
-                                    },
-                                    "Approve & write",
-                                  ),
-                                  h(
-                                    "button",
-                                    {
-                                      style: `${btn};color:${muted}`,
-                                      onClick: () => {
-                                        client?.sendDecision(
-                                          changeTurnId,
-                                          "reject",
-                                          undefined,
-                                          rejectReason.trim() || undefined,
-                                        );
-                                        setChanges([]);
-                                      },
-                                    },
-                                    "Reject",
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          h("input", {
-                            value: rejectReason,
-                            placeholder:
-                              "reject reason (optional) — fed back to the agent",
-                            onInput: (ev: Event) =>
-                              setRejectReason(
-                                (ev.target as HTMLInputElement).value,
-                              ),
-                            style:
-                              "width:100%;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:5px 7px;margin:4px 0 6px",
-                          }),
-                          ...changes.map((c) =>
-                            h("div", { style: "margin:6px 0" }, [
-                              h(
-                                "label",
-                                {
-                                  style:
-                                    "color:#ececef;margin-bottom:2px;display:flex;gap:6px;align-items:center;cursor:pointer",
-                                },
-                                [
-                                  h("input", {
-                                    type: "checkbox",
-                                    checked: picked[c.file] !== false,
-                                    onChange: (ev: Event) =>
-                                      setPicked((p) => ({
-                                        ...p,
-                                        [c.file]: (
-                                          ev.target as HTMLInputElement
-                                        ).checked,
-                                      })),
-                                  }),
-                                  h(
-                                    "span",
-                                    {},
-                                    `${c.file}  (${c.bytes}B)`,
-                                  ),
-                                ],
-                              ),
-                              h(
-                                "div",
-                                {
-                                  style:
-                                    "overflow:auto;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:8px;max-height:240px;font-size:11px;line-height:1.45",
-                                },
-                                diffLines(c.diff),
-                              ),
-                            ]),
-                          ),
-                        ])
-                      : null,
-                    applied
-                      ? h(
-                          "div",
-                          {
-                            style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px;display:flex;gap:8px;align-items:center;justify-content:space-between`,
-                          },
-                          [
-                            h(
-                              "span",
-                              { style: "color:#5fd18a" },
-                              applied,
-                            ),
-                            h(
-                              "span",
-                              {
-                                style:
-                                  "display:flex;gap:6px;align-items:center",
-                              },
-                              [
-                                lastSel
-                                  ? h(
-                                      "button",
-                                      {
-                                        style: postApplyError
-                                          ? `${btn};color:#0f0f12;background:#ff6b00;border-color:#ff6b00`
-                                          : btn,
-                                        onClick: () =>
-                                          void recaptureContinue(),
-                                      },
-                                      postApplyError
-                                        ? "⚠ Re-capture & fix"
-                                        : "Re-capture & continue",
-                                    )
-                                  : null,
-                                appliedTurnId
-                                  ? h(
-                                      "button",
-                                      {
-                                        style: btn,
-                                        onClick: () =>
-                                          client?.sendUndo(appliedTurnId),
-                                      },
-                                      "Undo",
-                                    )
-                                  : null,
-                              ],
-                            ),
-                          ],
-                        )
-                      : null,
-                    loopNote
-                      ? h(
-                          "div",
-                          {
-                            style: `color:${muted};margin-top:6px`,
-                          },
-                          loopNote,
-                        )
-                      : null,
-                    sessionN > 0 || sessionNote
-                      ? h(
-                          "div",
-                          {
-                            style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
-                          },
-                          [
-                            h(
-                              "div",
-                              {
-                                style: `color:#ff6b00;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center`,
-                              },
-                              [
-                                h(
-                                  "span",
-                                  {},
-                                  `SESSION · ${sessionN} applied`,
-                                ),
-                                sessionN > 0
-                                  ? h(
-                                      "button",
-                                      {
-                                        style: `${btn};color:${muted}`,
-                                        onClick: () =>
-                                          client?.sendUndoSession(),
-                                      },
-                                      "Undo all",
-                                    )
-                                  : null,
-                              ],
-                            ),
-                            sessionN > 0
-                              ? h(
-                                  "div",
-                                  {
-                                    style:
-                                      "display:flex;gap:6px;align-items:center",
-                                  },
-                                  [
-                                    h("input", {
-                                      value: commitMsg,
-                                      placeholder:
-                                        "commit message (optional)",
-                                      onInput: (ev: Event) =>
-                                        setCommitMsg(
-                                          (ev.target as HTMLInputElement)
-                                            .value,
-                                        ),
-                                      style:
-                                        "flex:1;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:5px 7px",
-                                    }),
-                                    h(
-                                      "button",
-                                      {
-                                        style: btn,
-                                        onClick: () =>
-                                          client?.sendCommitSession(
-                                            commitMsg.trim() || undefined,
-                                          ),
-                                      },
-                                      "Commit (local)",
-                                    ),
-                                  ],
-                                )
-                              : null,
-                            sessionNote
-                              ? h(
-                                  "div",
-                                  {
-                                    style: `color:#5fd18a;margin-top:6px`,
-                                  },
-                                  sessionNote,
-                                )
-                              : null,
-                          ],
-                        )
-                      : null,
-                  ],
+                  "⚙",
                 ),
-              ])
-            : h("div", { style: `color:${muted}` }, "no capture yet"),
+                h(
+                  "button",
+                  { style: btn, onClick: () => setOpen(false) },
+                  "close",
+                ),
+              ]),
+            ],
+          ),
+          settings,
+          ctx,
+          conversation,
+          timeline,
+          !bundle && !history.length
+            ? h(
+                "div",
+                { style: `color:${muted};margin-top:10px` },
+                "Pick an element to start.",
+              )
+            : null,
         ],
       )
     : null;
@@ -726,7 +903,7 @@ function App(props: { port: number }) {
       h(
         "span",
         {
-          style: `color:${muted};max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,
+          style: `color:${muted};max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,
         },
         detail || state,
       ),
@@ -748,7 +925,7 @@ function App(props: { port: number }) {
         },
         "Rect",
       ),
-      bundle
+      bundle || history.length
         ? h(
             "button",
             { onClick: () => setOpen((v) => !v), style: btn },

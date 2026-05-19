@@ -64,6 +64,20 @@ test("no source → degrades to selector, never fabricates a path", () => {
   assert.ok(!/\.tsx:/.test(d.body), "must not invent a file:line");
 });
 
+test("screenshot unavailable → honest reason, never 'attached'", () => {
+  const bundle = {
+    ...base,
+    target: { confidence: "selector-only", componentStack: [], selector: "x" },
+    screenshotUnavailable: "cross-origin <img> (cdn.supabase.co)",
+  };
+  const d = toIssueDraft(bundle);
+  assert.match(
+    d.body,
+    /Screenshot:\*\* unavailable — cross-origin <img> \(cdn\.supabase\.co\)/,
+  );
+  assert.ok(!/Screenshot:\*\* attached/.test(d.body));
+});
+
 test("IssueTrackerSink.submit delivers exactly one draft", async () => {
   const seen = [];
   const sink = new IssueTrackerSink((d) => seen.push(d));

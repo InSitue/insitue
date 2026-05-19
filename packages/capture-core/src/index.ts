@@ -11,8 +11,9 @@
  * capture-only" without a rewrite.
  */
 
-/** Bump when `CaptureBundle`'s shape changes; sinks branch on it. */
-export const CAPTURE_SCHEMA_VERSION = 1 as const;
+/** Bump when `CaptureBundle`'s shape changes; sinks branch on it.
+ *  v2: additive `screenshotUnavailable` (M5 — honest screenshots). */
+export const CAPTURE_SCHEMA_VERSION = 2 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
  *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3). */
 export const PROTOCOL_VERSION = 3 as const;
@@ -88,6 +89,10 @@ export interface CaptureBundle {
     dataUrl: string;
     bounds: { x: number; y: number; width: number; height: number };
   };
+  /** Set (and `screenshot` omitted) when an in-browser rasterise was
+   *  impossible — e.g. cross-origin media taints the canvas. Honest
+   *  signal so the UI/sink never shows a blank box claiming success. */
+  screenshotUnavailable?: string;
   viewport: { w: number; h: number; dpr: number; breakpoint?: string };
   runtime: {
     url: string;
@@ -155,7 +160,13 @@ export function toIssueDraft(bundle: CaptureBundle): IssueDraft {
     `**Tailwind:** ${bundle.tailwindClasses.join(" ") || "—"}`,
     `**Runtime:** ${bundle.runtime.console.length} log · ` +
       `${bundle.runtime.network.length} net · ${errs} err`,
-    `**Screenshot:** ${bundle.screenshot ? "attached" : "—"}`,
+    `**Screenshot:** ${
+      bundle.screenshot
+        ? "attached"
+        : bundle.screenshotUnavailable
+          ? `unavailable — ${bundle.screenshotUnavailable}`
+          : "—"
+    }`,
     bundle.userNote ? `\n> ${bundle.userNote}` : "",
     `\n_Captured ${bundle.createdAt} · schema v${bundle.schemaVersion}_`,
   ].join("\n");
