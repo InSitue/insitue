@@ -82,6 +82,13 @@ export function installRuntimeCollectors(): void {
   });
 }
 
+/** Live count of captured uncaught errors — lets the overlay notice
+ *  the host throwing right AFTER an apply (HMR settled into a break)
+ *  without rebuilding a whole bundle. A real signal, not a guess. */
+export function runtimeErrorCount(): number {
+  return errorBuf.length;
+}
+
 export function runtimeSnapshot(): {
   console: ConsoleEntry[];
   network: NetworkEntry[];

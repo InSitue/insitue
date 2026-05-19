@@ -11,7 +11,7 @@ import type {
   SelectionInput,
 } from "@insitu/capture-core";
 import { CompanionClient, type ConnState } from "./client.js";
-import { installRuntimeCollectors } from "./runtime.js";
+import { installRuntimeCollectors, runtimeErrorCount } from "./runtime.js";
 import { beginPick } from "./picker.js";
 import { buildBundle } from "./capture.js";
 
@@ -74,6 +74,9 @@ function App(props: { port: number }) {
   const [sessionNote, setSessionNote] = useState("");
   const [lastSel, setLastSel] = useState<SelectionInput | null>(null);
   const [loopNote, setLoopNote] = useState("");
+  const [thinking, setThinking] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const [postApplyError, setPostApplyError] = useState(false);
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -95,9 +98,16 @@ function App(props: { port: number }) {
         );
       },
       onAgentEvent: (e) => {
-        if (e.t === "agent-text") setReply((r) => r + e.delta);
-        else if (e.t === "agent-turn-complete") setTurnBusy(false);
-        else if (e.t === "agent-error") {
+        if (e.t === "agent-text") {
+          setThinking("");
+          setReply((r) => r + e.delta);
+        } else if (e.t === "agent-thinking") {
+          setThinking(e.note.slice(-160));
+        } else if (e.t === "agent-turn-complete") {
+          setThinking("");
+          setTurnBusy(false);
+        } else if (e.t === "agent-error") {
+          setThinking("");
           setReply((r) => r + `\n\n[agent-error] ${e.message}`);
           setTurnBusy(false);
         }
@@ -113,11 +123,32 @@ function App(props: { port: number }) {
       onApplied: (turnId, files, ref) => {
         setAppliedTurnId(turnId);
         setApplied(
-          `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR should reload; re-select to verify`,
+          `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR reloading…`,
         );
         setChanges([]);
         setSessionN((n) => n + 1);
         setSessionNote("");
+        setPostApplyError(false);
+        // Real HMR-settle signal: watch for the host throwing in the
+        // ~5s after the write. No new errors → say it settled clean;
+        // a new error → flag it (the Re-capture loop is one click).
+        const base = runtimeErrorCount();
+        let ticks = 0;
+        const iv = setInterval(() => {
+          ticks++;
+          if (runtimeErrorCount() > base) {
+            setPostApplyError(true);
+            setApplied(
+              `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — ⚠ host threw after HMR`,
+            );
+            clearInterval(iv);
+          } else if (ticks >= 10) {
+            setApplied(
+              `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — HMR settled clean; re-select to verify`,
+            );
+            clearInterval(iv);
+          }
+        }, 500);
       },
       onUndone: (_t, restored) => {
         setAppliedTurnId("");
@@ -145,6 +176,20 @@ function App(props: { port: number }) {
     void c.connect();
     return () => c.dispose();
   }, [props.port]);
+
+  // Live elapsed counter while a turn runs (streaming feedback).
+  useEffect(() => {
+    if (!turnBusy) {
+      setElapsed(0);
+      return;
+    }
+    const t0 = Date.now();
+    const iv = setInterval(
+      () => setElapsed(Math.floor((Date.now() - t0) / 1000)),
+      1000,
+    );
+    return () => clearInterval(iv);
+  }, [turnBusy]);
 
   const pick = async (mode: "element" | "rect") => {
     if (!client || state !== "connected") return;
@@ -371,7 +416,9 @@ function App(props: { port: number }) {
                               agentReady === false,
                             onClick: sendChat,
                           },
-                          turnBusy ? "…thinking" : "Send (⌘↵)",
+                          turnBusy
+                            ? `…working ${elapsed}s`
+                            : "Send (⌘↵)",
                         ),
                         turnBusy
                           ? h(
@@ -388,6 +435,22 @@ function App(props: { port: number }) {
                           : null,
                       ],
                     ),
+                    turnBusy && thinking
+                      ? h(
+                          "div",
+                          {
+                            style: `color:${muted};font-style:italic;margin:6px 0 0;white-space:pre-wrap;word-break:break-word`,
+                          },
+                          `💭 ${thinking}`,
+                        )
+                      : null,
+                    turnBusy && !reply && !thinking
+                      ? h(
+                          "div",
+                          { style: `color:${muted};margin:6px 0 0` },
+                          `…working ${elapsed}s`,
+                        )
+                      : null,
                     reply
                       ? h(
                           "pre",
@@ -530,11 +593,15 @@ function App(props: { port: number }) {
                                   ? h(
                                       "button",
                                       {
-                                        style: btn,
+                                        style: postApplyError
+                                          ? `${btn};color:#0f0f12;background:#ff6b00;border-color:#ff6b00`
+                                          : btn,
                                         onClick: () =>
                                           void recaptureContinue(),
                                       },
-                                      "Re-capture & continue",
+                                      postApplyError
+                                        ? "⚠ Re-capture & fix"
+                                        : "Re-capture & continue",
                                     )
                                   : null,
                                 appliedTurnId
