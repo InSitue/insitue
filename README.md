@@ -15,7 +15,7 @@ Localhost-first. MIT. See the design/plan in
 | `@insitu/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
 | `@insitu/sdk` | Dev-only `<InSitu />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
 
-## Status — M3 (safety / polish) ✅
+## Status — M0–M4 complete ✅ (v1 plan delivered)
 
 - **M0** trust boundary: `127.0.0.1`-only bind, `Origin` allowlist, per-session
   token, pinned protocol, prod-build refusal.
@@ -29,10 +29,18 @@ Localhost-first. MIT. See the design/plan in
 - **M3** safety/polish: reject-with-reason + per-file approve subset;
   session model — **Undo all** + surgical **Commit (local)** (protocol v3);
   compile/runtime-error **feedback loop** (re-capture → agent fixes its own
-  change); streaming elapsed/thinking + a **real** HMR-settle signal. 26
-  automated tests (`pnpm test`).
+  change); streaming elapsed/thinking + a **real** HMR-settle signal.
+- **M4** prod capture-only seam **validated** (not shipped): a real
+  `NODE_ENV=production` build with **no companion** still produces the same
+  `CaptureBundle` → `IssueTrackerSink` draft (selector + DOM + screenshot;
+  source resolved client-side via the babel attribute). Proves the
+  local→prod offering is a sink swap, not a rewrite. 29 automated tests
+  (`pnpm test`).
 
-Next: **M4** — prod capture-only seam validation (de-risk; not shipped).
+The v1 plan is delivered. Deferred by design: the hosted prod widget +
+team features (same `CaptureSink` seam), additional `AgentProvider`s,
+auto-re-capture after HMR — see the plan's Commercialization/Deferred
+sections.
 
 ## Runbooks
 
