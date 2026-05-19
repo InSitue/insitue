@@ -37,9 +37,29 @@ test("normalizeNative: text, thinking, result→complete", () => {
   const events = seq.flatMap((m) => normalizeNative(m, TURN));
   assert.deepEqual(events, [
     { t: "agent-thinking", turnId: TURN, note: "hmm" },
+    { t: "agent-activity", turnId: TURN, kind: "thinking", label: "thinking" },
     { t: "agent-text", turnId: TURN, delta: "Hello " },
     { t: "agent-text", turnId: TURN, delta: "world" },
     { t: "agent-turn-complete", turnId: TURN },
+  ]);
+});
+
+test("normalizeNative: tool_use → concise agent-activity", () => {
+  const events = normalizeNative(
+    {
+      type: "assistant",
+      message: {
+        content: [
+          { type: "tool_use", name: "Read", input: { file_path: "a/b/HubHero.tsx" } },
+          { type: "tool_use", name: "Grep", input: { pattern: "Indie-designed" } },
+        ],
+      },
+    },
+    TURN,
+  );
+  assert.deepEqual(events, [
+    { t: "agent-activity", turnId: TURN, kind: "tool", label: "Read HubHero.tsx" },
+    { t: "agent-activity", turnId: TURN, kind: "tool", label: 'Grep "Indie-designed"' },
   ]);
 });
 

@@ -1,11 +1,12 @@
 /**
  * The overlay: Preact in a Shadow DOM (style-isolated from the host).
  *
- * IA (M5 redesign): a compact header (target one-liner + collapsible
- * Context + settings), a focal Conversation area for the active turn,
- * and a Session timeline that completed turns file into — each
- * revisitable / continuable / undoable. Auto-apply is an opt-in,
- * in-memory setting (off by default; changes stay checkpointed).
+ * Conversational (M6): a real message thread per selection — the agent
+ * can ask, you reply in-thread, and continuity is preserved (the
+ * companion replays the transcript). A persistent working indicator
+ * (animated · last tool activity · elapsed) shows what it's doing
+ * during the long stretches before/between tokens. Completed edits
+ * still file into the Session timeline (revisit / continue / undo).
  */
 import { h, render } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -25,6 +26,7 @@ export interface InSituOptions {
 
 type Change = { file: string; diff: string; bytes: number };
 type TurnStatus = "applied" | "undone" | "committed";
+type ChatMsg = { role: "user" | "agent"; text: string };
 interface HistoryEntry {
   turnId: string;
   prompt: string;
@@ -48,8 +50,7 @@ const accent = "#ff6b00";
 const mono = "12px ui-monospace, SFMono-Regular, Menlo, monospace";
 const btn =
   "font:inherit;color:#ff6b00;background:transparent;border:1px solid #2e2e3c;border-radius:4px;padding:3px 8px;cursor:pointer";
-const card =
-  "background:#0b0b0d;border:1px solid #232330;border-radius:4px";
+const card = "background:#0b0b0d;border:1px solid #232330;border-radius:4px";
 
 function row(label: string, value: string) {
   return h("div", { style: "display:flex;gap:8px;margin:2px 0" }, [
@@ -103,10 +104,12 @@ function App(props: { port: number }) {
   const [agentReady, setAgentReady] = useState<boolean | null>(null);
   const [agentNote, setAgentNote] = useState("");
   const [chatInput, setChatInput] = useState("");
-  const [reply, setReply] = useState("");
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [turnBusy, setTurnBusy] = useState(false);
   const [thinking, setThinking] = useState("");
+  const [activity, setActivity] = useState("");
   const [elapsed, setElapsed] = useState(0);
+  const [pulse, setPulse] = useState(0);
   const [changes, setChanges] = useState<Change[]>([]);
   const [changeTurnId, setChangeTurnId] = useState("");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
@@ -122,14 +125,24 @@ function App(props: { port: number }) {
     sel: SelectionInput | null;
   } | null>(null);
 
-  // CompanionClient callbacks are bound once; mirror the state they
-  // must read at fire-time into refs.
   const autoApplyRef = useRef(false);
   const changesRef = useRef<Change[]>([]);
   const activeTurnRef = useRef<typeof activeTurn>(null);
+  const threadRef = useRef<HTMLDivElement | null>(null);
   autoApplyRef.current = autoApply;
   changesRef.current = changes;
   activeTurnRef.current = activeTurn;
+
+  // Append a streaming delta to the trailing agent message (or start
+  // one). Keeps the thread coherent across many small deltas.
+  const appendAgent = (delta: string) =>
+    setMessages((ms) => {
+      const last = ms[ms.length - 1];
+      if (last && last.role === "agent") {
+        return [...ms.slice(0, -1), { role: "agent", text: last.text + delta }];
+      }
+      return [...ms, { role: "agent", text: delta }];
+    });
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -150,15 +163,20 @@ function App(props: { port: number }) {
       onAgentEvent: (e) => {
         if (e.t === "agent-text") {
           setThinking("");
-          setReply((r) => r + e.delta);
+          setActivity("");
+          appendAgent(e.delta);
         } else if (e.t === "agent-thinking") {
           setThinking(e.note.slice(-160));
+        } else if (e.t === "agent-activity") {
+          setActivity(e.label);
         } else if (e.t === "agent-turn-complete") {
           setThinking("");
+          setActivity("");
           setTurnBusy(false);
         } else if (e.t === "agent-error") {
           setThinking("");
-          setReply((r) => r + `\n\n[agent-error] ${e.message}`);
+          setActivity("");
+          appendAgent(`\n\n[agent-error] ${e.message}`);
           setTurnBusy(false);
         }
       },
@@ -168,9 +186,7 @@ function App(props: { port: number }) {
         setPicked(Object.fromEntries(files.map((f) => [f.file, true])));
         setRejectReason("");
         if (autoApplyRef.current) {
-          setReply(
-            (r) => r + `\n[insitu] auto-apply on — writing without review`,
-          );
+          appendAgent(`\n[insitu] auto-apply on — writing without review`);
           c.sendDecision(turnId, "approve");
         }
       },
@@ -178,8 +194,7 @@ function App(props: { port: number }) {
         const at = activeTurnRef.current;
         const entry: HistoryEntry = {
           turnId,
-          prompt:
-            at && at.turnId === turnId ? at.prompt : "(applied change)",
+          prompt: at && at.turnId === turnId ? at.prompt : "(applied change)",
           sel: at && at.turnId === turnId ? at.sel : null,
           files,
           checkpointRef: ref,
@@ -189,14 +204,17 @@ function App(props: { port: number }) {
           postError: false,
         };
         setHistory((hs) => [entry, ...hs]);
-        // clear the active conversation for the next task
+        setMessages((ms) => [
+          ...ms,
+          {
+            role: "agent",
+            text: `✓ applied ${files.length} file${files.length > 1 ? "s" : ""} → filed to Session (${ref})`,
+          },
+        ]);
         setChanges([]);
-        setReply("");
         setChangeTurnId("");
-        setChatInput("");
         setActiveTurn(null);
         setSessionNote("");
-        // Real HMR-settle signal: watch the host for ~5s post-write.
         const base = runtimeErrorCount();
         let ticks = 0;
         const iv = setInterval(() => {
@@ -204,16 +222,16 @@ function App(props: { port: number }) {
           const threw = runtimeErrorCount() > base;
           if (threw || ticks >= 10) {
             setHistory((hs) =>
-              hs.map((e) =>
-                e.turnId === turnId
+              hs.map((en) =>
+                en.turnId === turnId
                   ? {
-                      ...e,
+                      ...en,
                       note: threw
                         ? "⚠ host threw after HMR"
                         : "HMR settled clean",
                       postError: threw,
                     }
-                  : e,
+                  : en,
               ),
             );
             clearInterval(iv);
@@ -222,22 +240,22 @@ function App(props: { port: number }) {
       },
       onUndone: (turnId) =>
         setHistory((hs) =>
-          hs.map((e) =>
-            e.turnId === turnId
-              ? { ...e, status: "undone", note: "undone — HMR reverting" }
-              : e,
+          hs.map((en) =>
+            en.turnId === turnId
+              ? { ...en, status: "undone", note: "undone — HMR reverting" }
+              : en,
           ),
         ),
       onSessionUndone: () =>
         setHistory((hs) =>
-          hs.map((e) =>
-            e.status === "applied" ? { ...e, status: "undone" } : e,
+          hs.map((en) =>
+            en.status === "applied" ? { ...en, status: "undone" } : en,
           ),
         ),
       onSessionCommitted: (commit) => {
         setHistory((hs) =>
-          hs.map((e) =>
-            e.status === "applied" ? { ...e, status: "committed" } : e,
+          hs.map((en) =>
+            en.status === "applied" ? { ...en, status: "committed" } : en,
           ),
         );
         setSessionNote(`committed as ${commit} (local only — not pushed)`);
@@ -248,25 +266,37 @@ function App(props: { port: number }) {
     return () => c.dispose();
   }, [props.port]);
 
+  // elapsed (1s) + pulse (~300ms) while a turn runs → live "working".
   useEffect(() => {
     if (!turnBusy) {
       setElapsed(0);
+      setPulse(0);
       return;
     }
     const t0 = Date.now();
-    const iv = setInterval(
+    const a = setInterval(
       () => setElapsed(Math.floor((Date.now() - t0) / 1000)),
       1000,
     );
-    return () => clearInterval(iv);
+    const b = setInterval(() => setPulse((p) => p + 1), 300);
+    return () => {
+      clearInterval(a);
+      clearInterval(b);
+    };
   }, [turnBusy]);
+
+  // autoscroll the thread as it grows / streams
+  useEffect(() => {
+    const el = threadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages, changes, turnBusy, activity]);
 
   const captureSel = async (sel: SelectionInput) => {
     setLastSel(sel);
     const b = await buildBundle(sel);
     setBundle(b);
     setResolved(null);
-    setReply("");
+    setMessages([]); // new selection ⇒ fresh conversation thread
     setChanges([]);
     setRevisitId("");
     setOpen(true);
@@ -288,20 +318,18 @@ function App(props: { port: number }) {
 
   const sendChat = () => {
     if (!client || !bundle || !chatInput.trim() || turnBusy) return;
-    // The transport keys every agent event/changeset by the BUNDLE id,
-    // so the active-turn identity must be the bundle id too — otherwise
-    // onApplied can't attribute the prompt/selection to the entry.
-    const turnId = bundle.id;
-    setActiveTurn({ turnId, prompt: chatInput.trim(), sel: lastSel });
-    setReply("");
+    const turnId = bundle.id; // events key by bundle id
+    const text = chatInput.trim();
+    setActiveTurn({ turnId, prompt: text, sel: lastSel });
+    setMessages((ms) => [...ms, { role: "user", text }]);
+    setChatInput("");
     setChanges([]);
     setRevisitId("");
+    setActivity("starting");
     setTurnBusy(true);
-    client.sendTurn(turnId, bundle.id, chatInput.trim());
+    client.sendTurn(turnId, bundle.id, text);
   };
 
-  // Continue from a finished turn: re-establish its selection as the
-  // live context so the next instruction is grounded there.
   const continueFrom = async (e: HistoryEntry) => {
     if (!client || !e.sel || busy || turnBusy) return;
     setBusy(true);
@@ -313,23 +341,17 @@ function App(props: { port: number }) {
     }
   };
 
-  // Error feedback loop: re-capture an entry's selection and, if the
-  // host is now throwing, ask the agent to fix its own change.
   const recaptureFix = async (e: HistoryEntry) => {
     if (!client || !e.sel || busy || turnBusy) return;
     setBusy(true);
     try {
       const b = await captureSel(e.sel);
-      const errs = b.runtime.errors.length;
-      if (errs > 0) {
+      if (b.runtime.errors.length > 0) {
         const turnId = b.id;
-        setActiveTurn({
-          turnId,
-          prompt: "fix the runtime error from the previous change",
-          sel: e.sel,
-        });
-        setReply("");
-        setChanges([]);
+        const text = "fix the runtime error from the previous change";
+        setActiveTurn({ turnId, prompt: text, sel: e.sel });
+        setMessages([{ role: "user", text }]);
+        setActivity("starting");
         setTurnBusy(true);
         client.sendTurn(
           turnId,
@@ -337,7 +359,9 @@ function App(props: { port: number }) {
           "Your previous edit was applied but the running app now reports the runtime errors shown in the context above. Diagnose the cause and propose a corrected edit.",
         );
       } else {
-        setReply("[insitu] re-captured — no runtime errors detected");
+        setMessages([
+          { role: "agent", text: "[insitu] re-captured — no runtime errors" },
+        ]);
       }
     } finally {
       setBusy(false);
@@ -345,7 +369,9 @@ function App(props: { port: number }) {
   };
 
   const approve = () => {
-    const chosen = changes.map((c) => c.file).filter((f) => picked[f] !== false);
+    const chosen = changes
+      .map((c) => c.file)
+      .filter((f) => picked[f] !== false);
     client?.sendDecision(
       changeTurnId,
       "approve",
@@ -360,6 +386,10 @@ function App(props: { port: number }) {
       rejectReason.trim() || undefined,
     );
     setChanges([]);
+    setMessages((ms) => [
+      ...ms,
+      { role: "agent", text: "[insitu] changes rejected" },
+    ]);
   };
 
   const t = bundle?.target;
@@ -368,6 +398,7 @@ function App(props: { port: number }) {
     : "no selection";
   const appliedCount = history.filter((e) => e.status === "applied").length;
   const revisit = history.find((e) => e.turnId === revisitId) || null;
+  const spin = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
   const pill = {
     position: "fixed",
@@ -386,7 +417,6 @@ function App(props: { port: number }) {
     boxShadow: "0 6px 24px rgba(0,0,0,0.45)",
   };
 
-  // ── Context (collapsed by default) ──
   const ctx =
     bundle && showCtx
       ? h("div", { style: "margin:8px 0;color:#bfbfc6" }, [
@@ -428,7 +458,138 @@ function App(props: { port: number }) {
         ])
       : null;
 
-  // ── Conversation (active turn) OR a revisited diff ──
+  const workingRow =
+    turnBusy &&
+    h(
+      "div",
+      {
+        style: `display:flex;gap:8px;align-items:center;margin:6px 0 0;color:${accent}`,
+      },
+      [
+        h("span", {}, spin[pulse % spin.length]),
+        h(
+          "span",
+          {
+            style: `color:${muted};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,
+          },
+          `${activity || "working"} · ${elapsed}s`,
+        ),
+        h(
+          "button",
+          {
+            style: `${btn};margin-left:auto`,
+            onClick: () => {
+              client?.cancelTurn("cur");
+              setTurnBusy(false);
+            },
+          },
+          "stop",
+        ),
+      ],
+    );
+
+  const thread = h(
+    "div",
+    {
+      ref: threadRef,
+      style: `max-height:300px;overflow:auto;margin:6px 0;display:flex;flex-direction:column;gap:6px`,
+    },
+    [
+      ...messages.map((m) =>
+        h(
+          "div",
+          {
+            style:
+              m.role === "user"
+                ? `align-self:flex-end;max-width:88%;${card};border-color:#2e2e3c;padding:6px 8px;color:#ececef;white-space:pre-wrap;word-break:break-word`
+                : `align-self:flex-start;max-width:96%;padding:6px 8px;color:#ececef;white-space:pre-wrap;word-break:break-word`,
+          },
+          m.text,
+        ),
+      ),
+      thinking && turnBusy
+        ? h(
+            "div",
+            {
+              style: `align-self:flex-start;color:${muted};font-style:italic;white-space:pre-wrap;word-break:break-word`,
+            },
+            `💭 ${thinking}`,
+          )
+        : null,
+    ],
+  );
+
+  const proposed = changes.length
+    ? h("div", { style: "margin-top:8px" }, [
+        h(
+          "div",
+          {
+            style: `color:${accent};margin-bottom:4px;display:flex;justify-content:space-between;align-items:center`,
+          },
+          [
+            h(
+              "span",
+              {},
+              `PROPOSED · ${changes.length} file${changes.length > 1 ? "s" : ""}`,
+            ),
+            h(
+              "span",
+              { style: "display:flex;gap:6px;align-items:center" },
+              [
+                h(
+                  "button",
+                  { style: btn, onClick: approve },
+                  "Approve & write",
+                ),
+                h(
+                  "button",
+                  { style: `${btn};color:${muted}`, onClick: reject },
+                  "Reject",
+                ),
+              ],
+            ),
+          ],
+        ),
+        h("input", {
+          value: rejectReason,
+          placeholder: "reject reason (optional) — fed to the agent",
+          onInput: (ev: Event) =>
+            setRejectReason((ev.target as HTMLInputElement).value),
+          style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:5px 7px;margin:4px 0 6px`,
+        }),
+        ...changes.map((c) =>
+          h("div", { style: "margin:6px 0" }, [
+            h(
+              "label",
+              {
+                style:
+                  "color:#ececef;margin-bottom:2px;display:flex;gap:6px;align-items:center;cursor:pointer",
+              },
+              [
+                h("input", {
+                  type: "checkbox",
+                  checked: picked[c.file] !== false,
+                  onChange: (ev: Event) =>
+                    setPicked((p) => ({
+                      ...p,
+                      [c.file]: (ev.target as HTMLInputElement).checked,
+                    })),
+                }),
+                h("span", {}, `${c.file}  (${c.bytes}B)`),
+              ],
+            ),
+            h(
+              "div",
+              {
+                style: `overflow:auto;${card};padding:8px;max-height:200px;font-size:11px;line-height:1.45`,
+              },
+              diffLines(c.diff),
+            ),
+          ]),
+        ),
+      ])
+    : null;
+
   const conversation = revisit
     ? h(
         "div",
@@ -463,166 +624,66 @@ function App(props: { port: number }) {
             style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
           },
           [
-            h("div", { style: `color:${accent};margin-bottom:6px` }, "ASK"),
+            h(
+              "div",
+              {
+                style: `color:${accent};margin-bottom:6px;display:flex;justify-content:space-between`,
+              },
+              [
+                h("span", {}, "ASK"),
+                autoApply
+                  ? h("span", { style: `color:${accent}` }, "auto-apply ON")
+                  : null,
+              ],
+            ),
             agentReady === false
               ? h(
                   "div",
                   { style: "color:#ff6b6b;margin-bottom:6px" },
                   agentNote,
                 )
-              : agentNote
+              : agentNote && !messages.length
                 ? h(
                     "div",
                     { style: `color:${muted};margin-bottom:6px` },
                     agentNote,
                   )
                 : null,
+            messages.length ? thread : null,
+            workingRow,
+            proposed,
             h("textarea", {
               value: chatInput,
-              placeholder:
-                "what does this do? · make the padding bigger · fix this bug",
-              rows: 3,
+              placeholder: messages.length
+                ? "reply… (the agent remembers this thread)"
+                : "what does this do? · make the padding bigger · fix this bug",
+              rows: 2,
               onInput: (ev: Event) =>
                 setChatInput((ev.target as HTMLTextAreaElement).value),
               onKeyDown: (ev: KeyboardEvent) => {
                 if ((ev.metaKey || ev.ctrlKey) && ev.key === "Enter")
                   sendChat();
               },
-              style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:8px;resize:vertical`,
+              style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:8px;margin-top:8px;resize:vertical`,
             }),
             h(
               "div",
-              {
-                style:
-                  "display:flex;gap:8px;align-items:center;margin-top:6px",
-              },
-              [
-                h(
-                  "button",
-                  {
-                    style: btn,
-                    disabled:
-                      turnBusy || !chatInput.trim() || agentReady === false,
-                    onClick: sendChat,
-                  },
-                  turnBusy ? `…working ${elapsed}s` : "Send (⌘↵)",
-                ),
-                turnBusy
-                  ? h(
-                      "button",
-                      {
-                        style: btn,
-                        onClick: () => {
-                          client?.cancelTurn("cur");
-                          setTurnBusy(false);
-                        },
-                      },
-                      "stop",
-                    )
-                  : null,
-                autoApply
-                  ? h(
-                      "span",
-                      { style: `color:${accent}` },
-                      "auto-apply ON",
-                    )
-                  : null,
-              ],
+              { style: "margin-top:6px" },
+              h(
+                "button",
+                {
+                  style: btn,
+                  disabled:
+                    turnBusy || !chatInput.trim() || agentReady === false,
+                  onClick: sendChat,
+                },
+                turnBusy ? `…working ${elapsed}s` : "Send (⌘↵)",
+              ),
             ),
-            turnBusy && thinking
-              ? h(
-                  "div",
-                  {
-                    style: `color:${muted};font-style:italic;margin:6px 0 0;white-space:pre-wrap;word-break:break-word`,
-                  },
-                  `💭 ${thinking}`,
-                )
-              : null,
-            reply
-              ? h(
-                  "pre",
-                  {
-                    style: `white-space:pre-wrap;word-break:break-word;${card};padding:10px;margin:8px 0 0;color:#ececef;max-height:220px;overflow:auto`,
-                  },
-                  reply,
-                )
-              : null,
-            changes.length
-              ? h("div", { style: "margin-top:10px" }, [
-                  h(
-                    "div",
-                    {
-                      style: `color:${accent};margin-bottom:4px;display:flex;justify-content:space-between;align-items:center`,
-                    },
-                    [
-                      h(
-                        "span",
-                        {},
-                        `PROPOSED · ${changes.length} file${changes.length > 1 ? "s" : ""}`,
-                      ),
-                      h(
-                        "span",
-                        { style: "display:flex;gap:6px;align-items:center" },
-                        [
-                          h(
-                            "button",
-                            { style: btn, onClick: approve },
-                            "Approve & write",
-                          ),
-                          h(
-                            "button",
-                            { style: `${btn};color:${muted}`, onClick: reject },
-                            "Reject",
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                  h("input", {
-                    value: rejectReason,
-                    placeholder: "reject reason (optional) — fed to the agent",
-                    onInput: (ev: Event) =>
-                      setRejectReason((ev.target as HTMLInputElement).value),
-                    style: `width:100%;box-sizing:border-box;font:inherit;color:#ececef;${card};padding:5px 7px;margin:4px 0 6px`,
-                  }),
-                  ...changes.map((c) =>
-                    h("div", { style: "margin:6px 0" }, [
-                      h(
-                        "label",
-                        {
-                          style:
-                            "color:#ececef;margin-bottom:2px;display:flex;gap:6px;align-items:center;cursor:pointer",
-                        },
-                        [
-                          h("input", {
-                            type: "checkbox",
-                            checked: picked[c.file] !== false,
-                            onChange: (ev: Event) =>
-                              setPicked((p) => ({
-                                ...p,
-                                [c.file]: (ev.target as HTMLInputElement)
-                                  .checked,
-                              })),
-                          }),
-                          h("span", {}, `${c.file}  (${c.bytes}B)`),
-                        ],
-                      ),
-                      h(
-                        "div",
-                        {
-                          style: `overflow:auto;${card};padding:8px;max-height:200px;font-size:11px;line-height:1.45`,
-                        },
-                        diffLines(c.diff),
-                      ),
-                    ]),
-                  ),
-                ])
-              : null,
           ],
         )
       : null;
 
-  // ── Session timeline ──
   const timeline = history.length
     ? h(
         "div",
@@ -676,40 +737,30 @@ function App(props: { port: number }) {
                       },
                       `${glyph} ${e.prompt}`,
                     ),
-                    h(
-                      "span",
-                      { style: "display:flex;gap:6px;flex:none" },
-                      [
-                        h(
-                          "button",
-                          {
-                            style: btn,
-                            onClick: () => setRevisitId(e.turnId),
-                          },
-                          "Revisit",
-                        ),
-                        e.sel
-                          ? h(
-                              "button",
-                              {
-                                style: btn,
-                                onClick: () => void continueFrom(e),
-                              },
-                              "Continue",
-                            )
-                          : null,
-                        e.status === "applied"
-                          ? h(
-                              "button",
-                              {
-                                style: btn,
-                                onClick: () => client?.sendUndo(e.turnId),
-                              },
-                              "Undo",
-                            )
-                          : null,
-                      ],
-                    ),
+                    h("span", { style: "display:flex;gap:6px;flex:none" }, [
+                      h(
+                        "button",
+                        { style: btn, onClick: () => setRevisitId(e.turnId) },
+                        "Revisit",
+                      ),
+                      e.sel
+                        ? h(
+                            "button",
+                            { style: btn, onClick: () => void continueFrom(e) },
+                            "Continue",
+                          )
+                        : null,
+                      e.status === "applied"
+                        ? h(
+                            "button",
+                            {
+                              style: btn,
+                              onClick: () => client?.sendUndo(e.turnId),
+                            },
+                            "Undo",
+                          )
+                        : null,
+                    ]),
                   ],
                 ),
                 h(
@@ -771,47 +822,36 @@ function App(props: { port: number }) {
               )
             : null,
           sessionNote
-            ? h(
-                "div",
-                { style: "color:#5fd18a;margin-top:6px" },
-                sessionNote,
-              )
+            ? h("div", { style: "color:#5fd18a;margin-top:6px" }, sessionNote)
             : null,
         ],
       )
     : null;
 
-  // ── Settings popover ──
   const settings = showSettings
-    ? h(
-        "div",
-        {
-          style: `${card};padding:10px;margin:8px 0`,
-        },
-        [
-          h(
-            "label",
-            {
-              style:
-                "display:flex;gap:8px;align-items:center;cursor:pointer;color:#ececef",
-            },
-            [
-              h("input", {
-                type: "checkbox",
-                checked: autoApply,
-                onChange: (ev: Event) =>
-                  setAutoApply((ev.target as HTMLInputElement).checked),
-              }),
-              h("span", {}, "Auto-apply (skip review)"),
-            ],
-          ),
-          h(
-            "div",
-            { style: `color:${muted};margin-top:4px` },
-            "Writes proposed changes immediately. Still checkpointed & undoable; no manual gate. Resets on reload.",
-          ),
-        ],
-      )
+    ? h("div", { style: `${card};padding:10px;margin:8px 0` }, [
+        h(
+          "label",
+          {
+            style:
+              "display:flex;gap:8px;align-items:center;cursor:pointer;color:#ececef",
+          },
+          [
+            h("input", {
+              type: "checkbox",
+              checked: autoApply,
+              onChange: (ev: Event) =>
+                setAutoApply((ev.target as HTMLInputElement).checked),
+            }),
+            h("span", {}, "Auto-apply (skip review)"),
+          ],
+        ),
+        h(
+          "div",
+          { style: `color:${muted};margin-top:4px` },
+          "Writes proposed changes immediately. Still checkpointed & undoable; no manual gate. Resets on reload.",
+        ),
+      ])
     : null;
 
   const panel = open
@@ -823,7 +863,7 @@ function App(props: { port: number }) {
             bottom: "64px",
             right: "16px",
             width: "440px",
-            maxHeight: "76vh",
+            maxHeight: "82vh",
             overflow: "auto",
             zIndex: 2147483000,
             font: mono,
@@ -836,7 +876,6 @@ function App(props: { port: number }) {
           },
         },
         [
-          // header: target one-liner + details/settings/close
           h(
             "div",
             {
@@ -855,19 +894,13 @@ function App(props: { port: number }) {
                 bundle
                   ? h(
                       "button",
-                      {
-                        style: btn,
-                        onClick: () => setShowCtx((v) => !v),
-                      },
+                      { style: btn, onClick: () => setShowCtx((v) => !v) },
                       showCtx ? "details ▾" : "details ▸",
                     )
                   : null,
                 h(
                   "button",
-                  {
-                    style: btn,
-                    onClick: () => setShowSettings((v) => !v),
-                  },
+                  { style: btn, onClick: () => setShowSettings((v) => !v) },
                   "⚙",
                 ),
                 h(
@@ -905,7 +938,7 @@ function App(props: { port: number }) {
         {
           style: `color:${muted};max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap`,
         },
-        detail || state,
+        turnBusy ? `${spin[pulse % spin.length]} ${activity || "working"}` : detail || state,
       ),
       h(
         "button",

@@ -20,6 +20,9 @@ export interface AgentSessionInput {
   bundle: CaptureBundle;
   resolved: ResolvedSource | null;
   userMessage: string;
+  /** Prior turns for THIS selection's thread (transcript replay —
+   *  InSitu owns conversation continuity; provider-agnostic). */
+  history?: Array<{ role: "user" | "assistant"; text: string }>;
 }
 
 export interface AgentSession {

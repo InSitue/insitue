@@ -15,8 +15,9 @@
  *  v2: additive `screenshotUnavailable` (M5 — honest screenshots). */
 export const CAPTURE_SCHEMA_VERSION = 2 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
- *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3). */
-export const PROTOCOL_VERSION = 3 as const;
+ *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3).
+ *  v4: agent-activity (M6 — live "what it's doing" feedback). */
+export const PROTOCOL_VERSION = 4 as const;
 
 export interface SourceLoc {
   /** Repo-relative POSIX path, e.g. `components/MainBar.tsx`. */
@@ -263,6 +264,14 @@ export interface ProposedEdit {
 export type AgentEvent =
   | { t: "agent-text"; turnId: string; delta: string }
   | { t: "agent-thinking"; turnId: string; note: string }
+  /** Live "what it's doing" signal (tool use / phase) — UI progress
+   *  only, never part of the transcript. */
+  | {
+      t: "agent-activity";
+      turnId: string;
+      kind: "tool" | "thinking" | "start";
+      label: string;
+    }
   | { t: "agent-tool-proposal"; turnId: string; edit: ProposedEdit }
   | { t: "agent-turn-complete"; turnId: string }
   | { t: "agent-error"; turnId: string; code: AgentErrorCode; message: string };

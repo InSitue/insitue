@@ -44,6 +44,12 @@ interface StoredBundle {
 export class AgentOrchestrator {
   private readonly provider: AgentProvider;
   private readonly bundles = new Map<string, StoredBundle>();
+  /** bundleId → conversation transcript for that selection's thread.
+   *  Replayed into each turn's prompt (provider-agnostic continuity). */
+  private readonly threads = new Map<
+    string,
+    Array<{ role: "user" | "assistant"; text: string }>
+  >();
   /** turnId → the proposed edits that passed the dry-run, awaiting an
    *  approve/reject decision. Cleared once decided. */
   private readonly pending = new Map<string, ProposedEdit[]>();
@@ -130,11 +136,13 @@ export class AgentOrchestrator {
     };
     try {
       if (!this.session) this.session = await this.provider.startSession();
+      const prior = this.threads.get(msg.bundleId) ?? [];
       await this.session.sendTurn(
         {
           bundle: stored.bundle,
           resolved: stored.resolved,
           userMessage: msg.userMessage,
+          history: prior.slice(),
         },
         (event) => {
           if (event.t === "agent-text") {
@@ -190,6 +198,20 @@ export class AgentOrchestrator {
                   },
                 });
               }
+            }
+            // Record the exchange for this selection's thread so the
+            // next turn has continuity (bounded; transcript replay).
+            const reply = cleanText().trim();
+            const thread = this.threads.get(msg.bundleId) ?? [];
+            thread.push({ role: "user", text: msg.userMessage.slice(0, 1200) });
+            if (reply) {
+              thread.push({ role: "assistant", text: reply.slice(0, 1200) });
+            }
+            while (thread.length > 12) thread.shift();
+            this.threads.set(msg.bundleId, thread);
+            if (this.threads.size > 16) {
+              const k = this.threads.keys().next().value;
+              if (k !== undefined) this.threads.delete(k);
             }
             this.deps.send({ t: "agent-stream", event });
             return;

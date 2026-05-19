@@ -20,7 +20,7 @@ export function redact(s: string): string {
 }
 
 export function buildPrompt(input: AgentSessionInput): string {
-  const { bundle, resolved, userMessage } = input;
+  const { bundle, resolved, userMessage, history } = input;
   const t = bundle.target;
   const lines: string[] = [];
 
@@ -81,6 +81,18 @@ export function buildPrompt(input: AgentSessionInput): string {
       "Not resolved to a file (selector-only). Use the selector + DOM",
       "context; ask for a file if you need certainty. Do NOT guess a path.",
     );
+  }
+
+  if (history && history.length) {
+    lines.push(
+      "",
+      "## Conversation so far (same selection — keep this context)",
+    );
+    for (const m of history) {
+      lines.push(
+        `${m.role === "user" ? "Developer" : "You"}: ${redact(m.text)}`,
+      );
+    }
   }
 
   lines.push(

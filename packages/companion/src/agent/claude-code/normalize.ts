@@ -17,8 +17,37 @@ export interface NativeMessage {
   is_error?: boolean;
   result?: string;
   message?: {
-    content?: Array<{ type?: string; text?: string; thinking?: string }>;
+    content?: Array<{
+      type?: string;
+      text?: string;
+      thinking?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
   };
+}
+
+/** A concise human label for a tool_use block, e.g.
+ *  `Read components/HubHero.tsx` / `Grep "Indie-designed"`. */
+function toolLabel(name: string, input: Record<string, unknown>): string {
+  const s = (v: unknown) =>
+    typeof v === "string" ? v : v == null ? "" : String(v);
+  const base = (p: string) => p.split("/").pop() || p;
+  switch (name) {
+    case "Read":
+    case "Edit":
+    case "Write":
+    case "NotebookEdit":
+      return `${name} ${base(s(input.file_path ?? input.path))}`;
+    case "Grep":
+      return `Grep "${s(input.pattern).slice(0, 40)}"`;
+    case "Glob":
+      return `Glob ${s(input.pattern).slice(0, 40)}`;
+    case "Bash":
+      return `Bash ${s(input.command).slice(0, 50)}`;
+    default:
+      return name || "tool";
+  }
 }
 
 /** Map one native message to zero or more normalized AgentEvents.
@@ -35,6 +64,19 @@ export function normalizeNative(
         out.push({ t: "agent-text", turnId, delta: block.text });
       } else if (block.type === "thinking" && block.thinking) {
         out.push({ t: "agent-thinking", turnId, note: block.thinking });
+        out.push({
+          t: "agent-activity",
+          turnId,
+          kind: "thinking",
+          label: "thinking",
+        });
+      } else if (block.type === "tool_use" && block.name) {
+        out.push({
+          t: "agent-activity",
+          turnId,
+          kind: "tool",
+          label: toolLabel(block.name, block.input ?? {}),
+        });
       }
     }
     return out;
