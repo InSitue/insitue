@@ -1,10 +1,10 @@
 /**
  * Region picker. Element mode: hover-highlight + click. Rect mode:
- * drag a freeform region. ESC cancels. Ignores InSitu's own nodes.
+ * drag a freeform region. ESC cancels. Ignores InSitue's own nodes.
  * The highlight layer lives at the top of <body> (not the overlay's
  * shadow root) so coordinates map 1:1 to the host page.
  */
-import type { SelectionInput, SelectionMode } from "@insitu/capture-core";
+import type { SelectionInput, SelectionMode } from "@insitue/capture-core";
 
 const ACCENT = "#ff6b00";
 

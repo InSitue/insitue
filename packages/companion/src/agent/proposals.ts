@@ -1,3 +1,3 @@
-// Shim → @insitu/agent-core (C0). Preserves dist/agent/proposals.js
+// Shim → @insitue/agent-core (C0). Preserves dist/agent/proposals.js
 // for the regression tests.
-export * from "@insitu/agent-core/proposals";
+export * from "@insitue/agent-core/proposals";

@@ -1,3 +1,3 @@
-// Shim → @insitu/agent-core (C0). server.ts imports `resolveCapture`
+// Shim → @insitue/agent-core (C0). server.ts imports `resolveCapture`
 // from "./capture.js" unchanged.
-export * from "@insitu/agent-core/capture";
+export * from "@insitue/agent-core/capture";

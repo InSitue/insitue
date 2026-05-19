@@ -8,7 +8,7 @@ import type {
   ConsoleEntry,
   NetworkEntry,
   RuntimeError,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 
 const CAP = 50;
 const consoleBuf: ConsoleEntry[] = [];

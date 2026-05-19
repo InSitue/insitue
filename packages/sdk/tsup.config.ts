@@ -6,7 +6,7 @@ import { defineConfig } from "tsup";
  * runtime), so Preact + the pure capture-core are BUNDLED in — not
  * left as bare specifiers (which break direct browser import and would
  * risk host-dedupe in a bundler). Only `react` stays external: it's
- * used solely by the thin `<InSitu/>` wrapper, and the consuming app
+ * used solely by the thin `<InSitue/>` wrapper, and the consuming app
  * already has React.
  */
 export default defineConfig({
@@ -20,5 +20,5 @@ export default defineConfig({
   dts: true,
   clean: true,
   external: ["react"],
-  noExternal: ["preact", /^preact\//, "@insitu/capture-core", "html-to-image"],
+  noExternal: ["preact", /^preact\//, "@insitue/capture-core", "html-to-image"],
 });

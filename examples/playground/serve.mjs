@@ -1,10 +1,10 @@
 /**
- * Zero-dependency static server for the InSitu playground.
+ * Zero-dependency static server for the InSitue playground.
  *
  * Serves the playground page on http://localhost:3000 (which matches
  * the companion's default Origin allowlist) and maps `/sdk/*` to the
- * built @insitu/sdk dist so the page can import the vanilla overlay
- * (`mountInSitu`) with no bundler and no React.
+ * built @insitue/sdk dist so the page can import the vanilla overlay
+ * (`mountInSitue`) with no bundler and no React.
  *
  * Usage:  pnpm build  &&  pnpm example   (then, in another terminal)
  *         pnpm companion
@@ -54,6 +54,6 @@ server.listen(PORT, "127.0.0.1", () => {
     `[insitu playground] http://localhost:${PORT}\n` +
       `  1. keep \`pnpm dev\` (or run \`pnpm build\`) so packages/sdk/dist exists\n` +
       `  2. in another terminal: \`pnpm companion\`\n` +
-      `  3. open the URL above — the InSitu pill should go green and Ping should work`,
+      `  3. open the URL above — the InSitue pill should go green and Ping should work`,
   );
 });

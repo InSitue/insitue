@@ -1,2 +1,2 @@
-// Shim → @insitu/agent-core (C0). Preserves dist/edit/mutator.js.
-export * from "@insitu/agent-core/mutator";
+// Shim → @insitue/agent-core (C0). Preserves dist/edit/mutator.js.
+export * from "@insitue/agent-core/mutator";

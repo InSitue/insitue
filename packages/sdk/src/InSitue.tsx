@@ -1,19 +1,19 @@
 /**
- * `<InSitu />` — the single dev-only import a host app adds (e.g. in
+ * `<InSitue />` — the single dev-only import a host app adds (e.g. in
  * `app/layout.tsx`). Renders nothing into the host React tree; on
  * mount it lazily loads the Preact Shadow-DOM overlay. Double-guarded:
  * the host should also gate the import behind a dev check so the
  * overlay chunk never ships in a prod bundle.
  */
 import { useEffect } from "react";
-import type { CaptureBundle, IssueDraft } from "@insitu/capture-core";
+import type { CaptureBundle, IssueDraft } from "@insitue/capture-core";
 
-export interface InSituProps {
+export interface InSitueProps {
   /** Companion loopback port (default 5747). */
   port?: number;
 }
 
-export function InSitu({ port }: InSituProps): null {
+export function InSitue({ port }: InSitueProps): null {
   useEffect(() => {
     // Bail only when explicitly a production build. `process` is
     // undefined in some bundlers (Vite) — treat unknown as dev so the
@@ -24,7 +24,7 @@ export function InSitu({ port }: InSituProps): null {
     let active = true;
     let dispose: (() => void) | undefined;
     void import("./overlay.js").then((m) => {
-      if (active) dispose = m.mountInSitu(port === undefined ? {} : { port });
+      if (active) dispose = m.mountInSitue(port === undefined ? {} : { port });
     });
     return () => {
       active = false;
@@ -34,19 +34,19 @@ export function InSitu({ port }: InSituProps): null {
   return null;
 }
 
-export interface InSituCaptureProps {
+export interface InSitueCaptureProps {
   /** Override delivery (default: console + JSON download +
    *  `window.__insitu_capture__`). */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
 }
 
 /**
- * `<InSituCapture />` — the prod capture-only path (M4, validated not
- * shipped). UNLIKE `<InSitu />` it does NOT bail in a production build:
+ * `<InSitueCapture />` — the prod capture-only path (M4, validated not
+ * shipped). UNLIKE `<InSitue />` it does NOT bail in a production build:
  * capture-only is exactly what prod runs (no companion to refuse). It
  * never touches fs/agent/WS; the same bundle just flows to a sink.
  */
-export function InSituCapture({ onCapture }: InSituCaptureProps): null {
+export function InSitueCapture({ onCapture }: InSitueCaptureProps): null {
   useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;

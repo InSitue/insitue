@@ -1,12 +1,12 @@
 {
-  "name": "@insitu/companion",
+  "name": "@insitue/companion",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Local companion process: loopback WS, project sandbox, agent edit gateway.",
   "license": "MIT",
   "bin": {
-    "insitu": "./dist/cli.js"
+    "insitue": "./dist/cli.js"
   },
   "files": ["dist"],
   "scripts": {
@@ -18,8 +18,8 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@insitu/agent-core": "workspace:*",
-    "@insitu/capture-core": "workspace:*",
+    "@insitue/agent-core": "workspace:*",
+    "@insitue/capture-core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "diff": "^9.0.0",

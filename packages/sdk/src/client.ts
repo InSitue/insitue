@@ -9,7 +9,7 @@ import {
   type CaptureBundle,
   type ResolvedSource,
   type ServerMessage,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 
 export type ConnState = "idle" | "connecting" | "connected" | "error";
 
@@ -61,7 +61,7 @@ export class CompanionClient {
       if (!res.ok) throw new Error(`handshake ${res.status}`);
       token = (await res.json()).token as string;
     } catch (e) {
-      this.events.onState("error", `companion unreachable (run \`npx insitu\`)`);
+      this.events.onState("error", `companion unreachable (run \`npx insitue\`)`);
       return;
     }
     await new Promise<void>((done) => {

@@ -2,8 +2,8 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 // Built artifact — run `pnpm build` once before `pnpm --filter
-// @insitu/example-react dev`.
-import insituBabel from "@insitu/sdk/babel";
+// @insitue/example-react dev`.
+import insituBabel from "@insitue/sdk/babel";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 

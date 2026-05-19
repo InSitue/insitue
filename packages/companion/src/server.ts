@@ -1,5 +1,5 @@
 /**
- * InSitu companion server — the trust boundary.
+ * InSitue companion server — the trust boundary.
  *
  * Hard rules (M0): bind loopback ONLY; pin Origin to the dev app;
  * require a per-session token; validate every client message with zod
@@ -23,7 +23,7 @@ import {
   type AgentUndoSessionMsg,
   type CaptureBundle,
   type ServerMessage,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 import { resolveCapture } from "./capture.js";
 import { AgentOrchestrator } from "./agent/orchestrator.js";
 
@@ -94,7 +94,7 @@ function send(ws: WebSocket, msg: ServerMessage): void {
 export function startCompanion(opts: CompanionOptions): Server {
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "[insitu] refusing to start under NODE_ENV=production — InSitu is a localhost dev tool.",
+      "[insitu] refusing to start under NODE_ENV=production — InSitue is a localhost dev tool.",
     );
   }
 

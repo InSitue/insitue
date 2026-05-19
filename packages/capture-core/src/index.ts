@@ -1,7 +1,7 @@
 /**
- * @insitu/capture-core — THE SEAM.
+ * @insitue/capture-core — THE SEAM.
  *
- * Pure, serializable data model + interfaces shared by every InSitu
+ * Pure, serializable data model + interfaces shared by every InSitue
  * vehicle (dev SDK now; production capture-only, browser extension or
  * Electron later). This package MUST NOT import transport (ws), an
  * agent SDK, or fs/git — that is enforced by lint (see eslint config)
@@ -150,7 +150,7 @@ export function toIssueDraft(bundle: CaptureBundle): IssueDraft {
     t?.componentStack.map((c) => c.name).join(" < ") || "(none)";
   const errs = bundle.runtime.errors.length;
   const title =
-    `[InSitu] ${t?.componentStack[0]?.name ?? t?.selector ?? "selection"}` +
+    `[InSitue] ${t?.componentStack[0]?.name ?? t?.selector ?? "selection"}` +
     ` on ${bundle.runtime.route ?? new URL(bundle.runtime.url).pathname}`;
   const body = [
     `**Where:** ${where}`,
@@ -331,7 +331,7 @@ export interface AgentUndoMsg {
 export interface AgentUndoSessionMsg {
   t: "agent-undo-session";
 }
-/** Explicit, user-initiated git commit of ONLY the files InSitu
+/** Explicit, user-initiated git commit of ONLY the files InSitue
  *  applied this session. Never auto; never pushes. */
 export interface AgentCommitSessionMsg {
   t: "agent-commit-session";

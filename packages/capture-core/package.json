@@ -1,9 +1,9 @@
 {
-  "name": "@insitu/capture-core",
+  "name": "@insitue/capture-core",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "The seam: pure, transport/agent/fs-free capture model shared by every InSitu vehicle.",
+  "description": "The seam: pure, transport/agent/fs-free capture model shared by every InSitue vehicle.",
   "license": "MIT",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

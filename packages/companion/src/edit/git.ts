@@ -1,2 +1,2 @@
-// Shim → @insitu/agent-core (C0). Preserves dist/edit/git.js.
-export * from "@insitu/agent-core/git";
+// Shim → @insitue/agent-core (C0). Preserves dist/edit/git.js.
+export * from "@insitue/agent-core/git";

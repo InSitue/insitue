@@ -30,14 +30,14 @@ test("commitFiles commits only the given paths; others untouched", async () => {
   const { commit, files } = await commitFiles(
     root,
     ["app.tsx"],
-    "InSitu: bump padding",
+    "InSitue: bump padding",
   );
 
   assert.match(commit, /^[0-9a-f]{7,}$/);
   assert.deepEqual(files, ["app.tsx"]);
 
   const show = git(root, "show", "--name-only", "--format=%s", "HEAD").trim();
-  assert.match(show, /InSitu: bump padding/);
+  assert.match(show, /InSitue: bump padding/);
   assert.match(show, /app\.tsx/);
   assert.ok(!/unrelated\.txt/.test(show), "unrelated file must not be in the commit");
 

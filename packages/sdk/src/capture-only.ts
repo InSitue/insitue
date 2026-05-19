@@ -12,7 +12,7 @@ import {
   IssueTrackerSink,
   type CaptureBundle,
   type IssueDraft,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 import { installRuntimeCollectors } from "./runtime.js";
 import { beginPick } from "./picker.js";
 import { buildBundle } from "./capture.js";
@@ -76,7 +76,7 @@ function CaptureOnlyApp(props: { onCapture?: CaptureOnlyOptions["onCapture"] }) 
       style: `position:fixed;bottom:16px;right:16px;z-index:2147483000;display:flex;gap:10px;align-items:center;padding:8px 12px;font:${mono};color:#ececef;background:rgba(15,15,18,0.94);border:1px solid #2e2e3c;border-radius:6px`,
     },
     [
-      h("strong", { style: "letter-spacing:0.08em" }, "InSitu"),
+      h("strong", { style: "letter-spacing:0.08em" }, "InSitue"),
       h("span", { style: `color:${muted}` }, "capture-only"),
       h(
         "button",

@@ -14,13 +14,13 @@ import type {
   CaptureBundle,
   ResolvedSource,
   SelectionInput,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 import { CompanionClient, type ConnState } from "./client.js";
 import { installRuntimeCollectors, runtimeErrorCount } from "./runtime.js";
 import { beginPick } from "./picker.js";
 import { buildBundle } from "./capture.js";
 
-export interface InSituOptions {
+export interface InSitueOptions {
   port?: number;
 }
 
@@ -932,7 +932,7 @@ function App(props: { port: number }) {
       h("span", {
         style: `width:8px;height:8px;border-radius:50%;background:${DOT[state]};display:inline-block`,
       }),
-      h("strong", { style: "letter-spacing:0.08em" }, "InSitu"),
+      h("strong", { style: "letter-spacing:0.08em" }, "InSitue"),
       h(
         "span",
         {
@@ -969,7 +969,7 @@ function App(props: { port: number }) {
   ]);
 }
 
-export function mountInSitu(opts: InSituOptions = {}): () => void {
+export function mountInSitue(opts: InSitueOptions = {}): () => void {
   const host = document.createElement("div");
   host.id = "insitu-root";
   host.setAttribute("data-insitu", "");

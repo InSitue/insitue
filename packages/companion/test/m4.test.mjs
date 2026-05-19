@@ -6,7 +6,7 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toIssueDraft, IssueTrackerSink } from "@insitu/capture-core";
+import { toIssueDraft, IssueTrackerSink } from "@insitue/capture-core";
 
 const base = {
   schemaVersion: 1,
@@ -87,5 +87,5 @@ test("IssueTrackerSink.submit delivers exactly one draft", async () => {
     target: { confidence: "selector-only", componentStack: [], selector: "x" },
   });
   assert.equal(seen.length, 1);
-  assert.match(seen[0].title, /\[InSitu\]/);
+  assert.match(seen[0].title, /\[InSitue\]/);
 });

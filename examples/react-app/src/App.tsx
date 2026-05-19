@@ -38,7 +38,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 export function App() {
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 48 }}>
-      <h1 style={{ letterSpacing: "-0.02em" }}>InSitu — React example</h1>
+      <h1 style={{ letterSpacing: "-0.02em" }}>InSitue — React example</h1>
       <p>
         Select any element below — the capture panel should resolve a real{" "}
         <code>file:line</code> and a component stack

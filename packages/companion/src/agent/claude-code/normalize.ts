@@ -1,3 +1,3 @@
-// Shim → @insitu/agent-core (C0). Preserves
+// Shim → @insitue/agent-core (C0). Preserves
 // dist/agent/claude-code/normalize.js for the regression tests.
-export * from "@insitu/agent-core/normalize";
+export * from "@insitue/agent-core/normalize";

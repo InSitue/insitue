@@ -1,9 +1,9 @@
 {
-  "name": "@insitu/sdk",
+  "name": "@insitue/sdk",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Dev-only InSitu SDK: Shadow-DOM overlay + secure companion client. Tree-shaken from prod.",
+  "description": "Dev-only InSitue SDK: Shadow-DOM overlay + secure companion client. Tree-shaken from prod.",
   "license": "MIT",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -40,7 +40,7 @@
     "react": { "optional": true }
   },
   "dependencies": {
-    "@insitu/capture-core": "workspace:*",
+    "@insitue/capture-core": "workspace:*",
     "html-to-image": "^1.11.13",
     "preact": "^10.25.1"
   },

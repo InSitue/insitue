@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `npx insitu` — starts the companion beside your dev server.
+ * `npx insitue` — starts the companion beside your dev server.
  */
 import { resolve } from "node:path";
 import { Command } from "commander";
@@ -12,7 +12,7 @@ const program = new Command();
 
 program
   .name("insitu")
-  .description("InSitu companion — local visual agentic loop for your own codebase")
+  .description("InSitue companion — local visual agentic loop for your own codebase")
   .version(COMPANION_VERSION)
   .option("-p, --port <number>", "loopback port", "5747")
   .option(

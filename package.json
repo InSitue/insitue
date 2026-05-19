@@ -13,10 +13,10 @@
     "dev": "turbo run dev",
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
-    "companion": "pnpm --filter @insitu/companion run start",
+    "companion": "pnpm --filter @insitue/companion run start",
     "demo": "turbo run build && node scripts/demo.mjs",
     "example": "node examples/playground/serve.mjs",
-    "test": "turbo run build && pnpm --filter @insitu/companion run test",
+    "test": "turbo run build && pnpm --filter @insitue/companion run test",
     "license:check": "license-checker --production --excludePrivatePackages --onlyAllow 'MIT;MIT OR X11;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense'"
   },
   "pnpm": {

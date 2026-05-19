@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { InSitu, InSituCapture } from "@insitu/sdk";
+import { InSitue, InSitueCapture } from "@insitue/sdk";
 import { App } from "./App.js";
 
 // Dev → the full local agentic loop (companion). Production build →
@@ -12,14 +12,14 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <App />
     {prod ? (
-      <InSituCapture
+      <InSitueCapture
         onCapture={(draft, bundle) => {
           (window as unknown as Record<string, unknown>).__insitu_capture__ =
             { draft, bundle };
         }}
       />
     ) : (
-      <InSitu />
+      <InSitue />
     )}
   </StrictMode>,
 );

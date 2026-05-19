@@ -1,4 +1,4 @@
-# InSitu
+# InSitue
 
 Load your own running dev app, click or define any region on the page, and
 converse with an AI coding agent **in situ** — it sees the selected element +
@@ -11,9 +11,9 @@ Localhost-first. MIT. See the design/plan in
 
 | Package | Role |
 |---|---|
-| `@insitu/capture-core` | **The seam.** Pure, serializable capture model + `CaptureSink` interface. No transport/agent/fs. Swapping the sink turns "local agentic edit" into a future "prod capture-only" with no rewrite. |
-| `@insitu/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
-| `@insitu/sdk` | Dev-only `<InSitu />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
+| `@insitue/capture-core` | **The seam.** Pure, serializable capture model + `CaptureSink` interface. No transport/agent/fs. Swapping the sink turns "local agentic edit" into a future "prod capture-only" with no rewrite. |
+| `@insitue/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
+| `@insitue/sdk` | Dev-only `<InSitue />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
 
 ## Status — M0–M4 complete ✅ (v1 plan delivered)
 
@@ -55,7 +55,7 @@ pnpm install
 pnpm demo          # builds, then runs the companion + React example together
 ```
 
-Open <http://localhost:3100>, click **Select** in the InSitu pill, then
+Open <http://localhost:3100>, click **Select** in the InSitue pill, then
 click any element — the panel shows its real `file:line`, component
 stack, styles, screenshot and runtime. Ctrl+C stops both.
 
@@ -69,13 +69,13 @@ pnpm dev           # watch-build all packages
 
 ## Dogfooding into an existing app (manual, dev-only)
 
-InSitu is consumed by adding the dev-only component to a host app's root layout.
+InSitue is consumed by adding the dev-only component to a host app's root layout.
 This is intentionally a **manual** step you control (e.g. in another repo) so it
 never lands in that app's production build:
 
 ```tsx
 // app/layout.tsx (or equivalent) — DEV ONLY
-{process.env.NODE_ENV === "development" && <InSitu />}
+{process.env.NODE_ENV === "development" && <InSitue />}
 ```
 
 Then run the app's dev server and, beside it, `npx insitu` from the app's repo

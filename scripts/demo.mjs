@@ -30,7 +30,7 @@ const procs = [
     name: "example",
     color: "\x1b[35m",
     cmd: "pnpm",
-    args: ["--filter", "@insitu/example-react", "dev"],
+    args: ["--filter", "@insitue/example-react", "dev"],
   },
 ];
 
@@ -66,8 +66,8 @@ for (const p of procs) {
 }
 
 console.log(
-  "\x1b[32m[demo]\x1b[0m InSitu demo starting…\n" +
-    `\x1b[32m[demo]\x1b[0m open http://localhost:${EXAMPLE_PORT} — click "Select" in the InSitu pill\n` +
+  "\x1b[32m[demo]\x1b[0m InSitue demo starting…\n" +
+    `\x1b[32m[demo]\x1b[0m open http://localhost:${EXAMPLE_PORT} — click "Select" in the InSitue pill\n` +
     "\x1b[32m[demo]\x1b[0m Ctrl+C to stop both processes",
 );
 

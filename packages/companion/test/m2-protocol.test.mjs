@@ -10,7 +10,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { startCompanion } from "../dist/server.js";
-import { PROTOCOL_VERSION } from "@insitu/capture-core";
+import { PROTOCOL_VERSION } from "@insitue/capture-core";
 
 const PORT = 5795;
 const ORIGIN = "http://localhost:3000";

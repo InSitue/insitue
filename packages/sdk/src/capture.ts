@@ -14,7 +14,7 @@ import {
   serializeNode,
   type CaptureBundle,
   type SelectionInput,
-} from "@insitu/capture-core";
+} from "@insitue/capture-core";
 import { runtimeSnapshot } from "./runtime.js";
 
 /** Is `url` a cross-origin resource that would taint a canvas?
