@@ -12,3 +12,7 @@ dist/
 .env.*
 !.env.example
 .vercel
+
+# private keys / local secret material
+*.pem
+.secrets/
