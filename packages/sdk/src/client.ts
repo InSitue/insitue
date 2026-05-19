@@ -5,12 +5,20 @@
  */
 import {
   PROTOCOL_VERSION,
+  type AgentEvent,
   type CaptureBundle,
   type ResolvedSource,
   type ServerMessage,
 } from "@insitu/capture-core";
 
 export type ConnState = "idle" | "connecting" | "connected" | "error";
+
+export interface AgentStatus {
+  ready: boolean;
+  transport: string;
+  warnings: string[];
+  blockers: string[];
+}
 
 export interface ClientEvents {
   onState(state: ConnState, detail?: string): void;
@@ -19,6 +27,8 @@ export interface ClientEvents {
     resolved: ResolvedSource | null,
     note: string,
   ): void;
+  onAgentStatus?(s: AgentStatus): void;
+  onAgentEvent?(e: AgentEvent): void;
 }
 
 export class CompanionClient {
@@ -64,6 +74,15 @@ export class CompanionClient {
             this.pending.delete(msg.nonce);
             cb(performance.now() - Number(msg.nonce.split(":")[1]));
           }
+        } else if (msg.t === "agent-status") {
+          this.events.onAgentStatus?.({
+            ready: msg.ready,
+            transport: msg.transport,
+            warnings: msg.warnings,
+            blockers: msg.blockers,
+          });
+        } else if (msg.t === "agent-stream") {
+          this.events.onAgentEvent?.(msg.event);
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
@@ -102,6 +121,19 @@ export class CompanionClient {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(JSON.stringify({ t: "capture", bundle }));
     return true;
+  }
+
+  sendTurn(turnId: string, bundleId: string, userMessage: string): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(
+      JSON.stringify({ t: "agent-turn", turnId, bundleId, userMessage }),
+    );
+    return true;
+  }
+
+  cancelTurn(turnId: string): void {
+    this.ws?.send(JSON.stringify({ t: "agent-cancel", turnId }));
   }
 
   dispose(): void {

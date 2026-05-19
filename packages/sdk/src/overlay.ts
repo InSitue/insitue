@@ -40,6 +40,11 @@ function App(props: { port: number }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [agentReady, setAgentReady] = useState<boolean | null>(null);
+  const [agentNote, setAgentNote] = useState("");
+  const [chatInput, setChatInput] = useState("");
+  const [reply, setReply] = useState("");
+  const [turnBusy, setTurnBusy] = useState(false);
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -51,6 +56,22 @@ function App(props: { port: number }) {
       onResolved: (_id, r, n) => {
         setResolved(r);
         setNote(n);
+      },
+      onAgentStatus: (s) => {
+        setAgentReady(s.ready);
+        setAgentNote(
+          s.blockers.length
+            ? `blocked: ${s.blockers.join("; ")}`
+            : s.warnings.join(" · ") || `agent ready (${s.transport})`,
+        );
+      },
+      onAgentEvent: (e) => {
+        if (e.t === "agent-text") setReply((r) => r + e.delta);
+        else if (e.t === "agent-turn-complete") setTurnBusy(false);
+        else if (e.t === "agent-error") {
+          setReply((r) => r + `\n\n[agent-error] ${e.message}`);
+          setTurnBusy(false);
+        }
       },
     });
     setClient(c);
@@ -73,6 +94,14 @@ function App(props: { port: number }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const sendChat = () => {
+    if (!client || !bundle || !chatInput.trim() || turnBusy) return;
+    const turnId = `turn_${Date.now().toString(36)}`;
+    setReply("");
+    setTurnBusy(true);
+    client.sendTurn(turnId, bundle.id, chatInput.trim());
   };
 
   const pill = {
@@ -164,11 +193,100 @@ function App(props: { port: number }) {
                       "pre",
                       {
                         style:
-                          "white-space:pre;overflow:auto;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:10px;margin:0;color:#bfbfc6",
+                          "white-space:pre;overflow:auto;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:10px;margin:0;color:#bfbfc6;max-height:180px",
                       },
                       `${resolved.file}:${resolved.line}\n\n${resolved.snippet}`,
                     )
                   : null,
+                h(
+                  "div",
+                  {
+                    style: `margin-top:12px;border-top:1px solid #232330;padding-top:10px`,
+                  },
+                  [
+                    h(
+                      "div",
+                      { style: `color:#ff6b00;margin-bottom:6px` },
+                      "ASK IN SITU",
+                    ),
+                    agentReady === false
+                      ? h(
+                          "div",
+                          { style: `color:#ff6b6b;margin-bottom:6px` },
+                          agentNote,
+                        )
+                      : agentNote
+                        ? h(
+                            "div",
+                            { style: `color:${muted};margin-bottom:6px` },
+                            agentNote,
+                          )
+                        : null,
+                    h("textarea", {
+                      value: chatInput,
+                      placeholder:
+                        "e.g. what does this component do? / how would I make the padding bigger?",
+                      rows: 3,
+                      onInput: (ev: Event) =>
+                        setChatInput(
+                          (ev.target as HTMLTextAreaElement).value,
+                        ),
+                      onKeyDown: (ev: KeyboardEvent) => {
+                        if (
+                          (ev.metaKey || ev.ctrlKey) &&
+                          ev.key === "Enter"
+                        )
+                          sendChat();
+                      },
+                      style:
+                        "width:100%;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:8px;resize:vertical",
+                    }),
+                    h(
+                      "div",
+                      {
+                        style:
+                          "display:flex;gap:8px;align-items:center;margin-top:6px",
+                      },
+                      [
+                        h(
+                          "button",
+                          {
+                            style: btn,
+                            disabled:
+                              turnBusy ||
+                              !chatInput.trim() ||
+                              agentReady === false,
+                            onClick: sendChat,
+                          },
+                          turnBusy ? "…thinking" : "Send (⌘↵)",
+                        ),
+                        turnBusy
+                          ? h(
+                              "button",
+                              {
+                                style: btn,
+                                onClick: () => {
+                                  client?.cancelTurn("cur");
+                                  setTurnBusy(false);
+                                },
+                              },
+                              "stop",
+                            )
+                          : null,
+                      ],
+                    ),
+                    reply
+                      ? h(
+                          "pre",
+                          {
+                            style:
+                              "white-space:pre-wrap;word-break:break-word;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:10px;margin:8px 0 0;color:#ececef;max-height:240px;overflow:auto",
+                          },
+                          reply,
+                        )
+                      : null,
+                  ],
+                ),
               ])
             : h("div", { style: `color:${muted}` }, "no capture yet"),
         ],

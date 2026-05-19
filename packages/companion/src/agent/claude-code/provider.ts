@@ -6,7 +6,8 @@
  */
 import { execa } from "execa";
 import type { AgentProvider, AgentSession, PreflightResult } from "../provider.js";
-import { apiKeyVarsPresent } from "../env.js";
+import { apiKeyVarsPresent, scrubbedEnv } from "../env.js";
+import { ClaudeCliSession } from "./transport-cli.js";
 
 export type ClaudeTransport = "cli-headless" | "mcp" | "sdk";
 
@@ -63,9 +64,16 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 
   startSession(): Promise<AgentSession> {
-    // Filled in M2-P2 (cli-headless transport).
-    return Promise.reject(
-      new Error("agent session not implemented until M2-P2"),
+    if (this.opts.transport !== "cli-headless") {
+      return Promise.reject(
+        new Error(`transport "${this.opts.transport}" arrives in M2-P5`),
+      );
+    }
+    return Promise.resolve(
+      new ClaudeCliSession({
+        root: this.opts.root,
+        env: scrubbedEnv(this.opts.allowApiKey),
+      }),
     );
   }
 }

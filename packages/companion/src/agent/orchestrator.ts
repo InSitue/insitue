@@ -10,10 +10,12 @@ import type {
   AgentDecisionMsg,
   AgentTurnMsg,
   AgentUndoMsg,
+  CaptureBundle,
+  ResolvedSource,
   ServerMessage,
 } from "@insitu/capture-core";
 import { ClaudeCodeProvider } from "./claude-code/provider.js";
-import type { AgentProvider } from "./provider.js";
+import type { AgentProvider, AgentSession } from "./provider.js";
 
 export interface OrchestratorDeps {
   root: string;
@@ -22,14 +24,34 @@ export interface OrchestratorDeps {
   send: (msg: ServerMessage) => void;
 }
 
+interface StoredBundle {
+  bundle: CaptureBundle;
+  resolved: ResolvedSource | null;
+}
+
 export class AgentOrchestrator {
   private readonly provider: AgentProvider;
+  private readonly bundles = new Map<string, StoredBundle>();
+  private session: AgentSession | null = null;
+  private busy = false;
+
   constructor(private readonly deps: OrchestratorDeps) {
     this.provider = new ClaudeCodeProvider({
       transport: deps.transport,
       allowApiKey: deps.allowApiKey,
       root: deps.root,
     });
+  }
+
+  /** Called by the server when a capture is submitted, so a later
+   *  agent-turn can reference it by id without re-sending the bundle. */
+  registerBundle(bundle: CaptureBundle, resolved: ResolvedSource | null): void {
+    this.bundles.set(bundle.id, { bundle, resolved });
+    // bound memory: keep only the most recent handful
+    if (this.bundles.size > 16) {
+      const first = this.bundles.keys().next().value;
+      if (first !== undefined) this.bundles.delete(first);
+    }
   }
 
   /** Sent once after the WS session authenticates: runs the provider
@@ -55,23 +77,49 @@ export class AgentOrchestrator {
   }
 
   handleTurn(msg: AgentTurnMsg): void {
-    // P2 wires provider.startSession()/sendTurn(); P1 = preflight only.
-    this.deps.send({
-      t: "agent-stream",
-      event: {
-        t: "agent-error",
-        turnId: msg.turnId,
-        code: "internal",
-        message: "turn handling arrives in M2-P2",
-      },
-    });
+    void this.runTurn(msg);
+  }
+
+  private async runTurn(msg: AgentTurnMsg): Promise<void> {
+    const fail = (code: "internal" | "transport", message: string) =>
+      this.deps.send({
+        t: "agent-stream",
+        event: { t: "agent-error", turnId: msg.turnId, code, message },
+      });
+
+    if (this.busy) {
+      fail("internal", "a turn is already running (single-flight)");
+      return;
+    }
+    const stored = this.bundles.get(msg.bundleId);
+    if (!stored) {
+      fail("internal", `unknown bundle ${msg.bundleId} — re-select first`);
+      return;
+    }
+    this.busy = true;
+    try {
+      if (!this.session) this.session = await this.provider.startSession();
+      await this.session.sendTurn(
+        {
+          bundle: stored.bundle,
+          resolved: stored.resolved,
+          userMessage: msg.userMessage,
+        },
+        (event) => this.deps.send({ t: "agent-stream", event }),
+      );
+    } catch (e) {
+      fail("transport", (e as Error).message);
+    } finally {
+      this.busy = false;
+    }
   }
 
   handleDecision(_msg: AgentDecisionMsg): void {
     /* P3+ */
   }
   handleCancel(_msg: AgentCancelMsg): void {
-    /* P2+ */
+    this.session?.cancel();
+    this.busy = false;
   }
   handleUndo(_msg: AgentUndoMsg): void {
     /* P5 */

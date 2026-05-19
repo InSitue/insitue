@@ -200,6 +200,7 @@ export function startCompanion(opts: CompanionOptions): Server {
           const bundle = msg.bundle as unknown as CaptureBundle;
           const { resolved, note } = resolveCapture(opts.root, bundle);
           console.log(`[insitu] capture ${bundle.id}: ${note}`);
+          orchestrator?.registerBundle(bundle, resolved);
           send(ws, {
             t: "capture-resolved",
             id: bundle.id,
