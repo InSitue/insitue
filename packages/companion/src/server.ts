@@ -15,15 +15,24 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
   PROTOCOL_VERSION,
+  type AgentCancelMsg,
+  type AgentDecisionMsg,
+  type AgentTurnMsg,
+  type AgentUndoMsg,
   type CaptureBundle,
   type ServerMessage,
 } from "@insitu/capture-core";
 import { resolveCapture } from "./capture.js";
+import { AgentOrchestrator } from "./agent/orchestrator.js";
 
 export const COMPANION_VERSION = "0.0.0";
 
+export type AgentTransport = "cli-headless" | "mcp" | "sdk";
+
 export interface CompanionOptions {
   port: number;
+  /** Agent transport (default cli-headless). */
+  transport?: AgentTransport;
   /** Allowed browser Origins (the running dev app). */
   origins: string[];
   /** Absolute project root the companion is scoped to. */
@@ -52,6 +61,21 @@ const clientMessage = z.discriminatedUnion("t", [
       .object({ id: z.string().min(1) })
       .passthrough(),
   }),
+  z.object({
+    t: z.literal("agent-turn"),
+    turnId: z.string().min(1),
+    bundleId: z.string().min(1),
+    userMessage: z.string(),
+  }),
+  z.object({
+    t: z.literal("agent-decision"),
+    turnId: z.string().min(1),
+    decision: z.enum(["approve", "reject"]),
+    files: z.array(z.string()).optional(),
+    reason: z.string().optional(),
+  }),
+  z.object({ t: z.literal("agent-cancel"), turnId: z.string().min(1) }),
+  z.object({ t: z.literal("agent-undo"), turnId: z.string().min(1) }),
 ]);
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -108,6 +132,7 @@ export function startCompanion(opts: CompanionOptions): Server {
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
       let authed = false;
+      let orchestrator: AgentOrchestrator | null = null;
       ws.on("message", (raw) => {
         let parsed: unknown;
         try {
@@ -147,6 +172,12 @@ export function startCompanion(opts: CompanionOptions): Server {
           }
           authed = true;
           send(ws, { t: "hello-ok", companionVersion: COMPANION_VERSION });
+          orchestrator = new AgentOrchestrator({
+            root: opts.root,
+            transport: opts.transport ?? "cli-headless",
+            send: (m) => send(ws, m),
+          });
+          orchestrator.announce();
           return;
         }
         if (!authed) {
@@ -172,6 +203,20 @@ export function startCompanion(opts: CompanionOptions): Server {
             resolved,
             note,
           });
+          return;
+        }
+        // zod `.optional()` widens to `T | undefined`; the pure
+        // message types use `T?` (exactOptionalPropertyTypes). The
+        // structure is already validated — cast at the boundary, same
+        // pattern as the `capture` bundle above.
+        if (msg.t === "agent-turn") {
+          orchestrator?.handleTurn(msg as unknown as AgentTurnMsg);
+        } else if (msg.t === "agent-decision") {
+          orchestrator?.handleDecision(msg as unknown as AgentDecisionMsg);
+        } else if (msg.t === "agent-cancel") {
+          orchestrator?.handleCancel(msg as unknown as AgentCancelMsg);
+        } else if (msg.t === "agent-undo") {
+          orchestrator?.handleUndo(msg as unknown as AgentUndoMsg);
         }
       });
     });

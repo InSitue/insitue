@@ -10,6 +10,7 @@ import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import WebSocket from "ws";
 import { startCompanion } from "../dist/server.js";
+import { PROTOCOL_VERSION } from "@insitu/capture-core";
 
 const PORT = 5793;
 const GOOD_ORIGIN = "http://localhost:3000";
@@ -41,7 +42,7 @@ test("handshake issues a token to the pinned Origin", async () => {
   assert.ok(typeof body.token === "string" && body.token.length > 0);
 });
 
-function open(origin, token, { protocolVersion = 1 } = {}) {
+function open(origin, token, { protocolVersion = PROTOCOL_VERSION } = {}) {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, { origin });
     const msgs = [];
@@ -99,7 +100,9 @@ test("secure ping round-trip on a valid session", async () => {
       }
     });
     ws.on("open", () =>
-      ws.send(JSON.stringify({ t: "hello", protocolVersion: 1, token })),
+      ws.send(
+        JSON.stringify({ t: "hello", protocolVersion: PROTOCOL_VERSION, token }),
+      ),
     );
     ws.on("error", reject);
     setTimeout(() => reject(new Error("ping timeout")), 2000);

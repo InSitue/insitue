@@ -13,8 +13,9 @@
 
 /** Bump when `CaptureBundle`'s shape changes; sinks branch on it. */
 export const CAPTURE_SCHEMA_VERSION = 1 as const;
-/** Bump when the WS envelope below changes; companion/SDK pin it. */
-export const PROTOCOL_VERSION = 1 as const;
+/** Bump when the WS envelope below changes; companion/SDK pin it.
+ *  v2: adds the agent edit-loop messages (M2). */
+export const PROTOCOL_VERSION = 2 as const;
 
 export interface SourceLoc {
   /** Repo-relative POSIX path, e.g. `components/MainBar.tsx`. */
@@ -164,14 +165,108 @@ export interface CaptureResolvedMsg {
   note: string;
 }
 
+/* ── Agent edit loop (M2) ──
+ * Pure event/contract types. `AgentEvent` is provider-agnostic — a
+ * ClaudeCodeProvider transport (cli-headless | mcp | sdk) normalizes
+ * its native stream into this; the overlay/companion never name a
+ * provider. Edits are PROPOSED here, never executed by the agent. */
+
+export type AgentErrorCode =
+  | "not-logged-in"
+  | "api-key-set"
+  | "claude-missing"
+  | "transport"
+  | "internal";
+
+/** A normalized file edit the agent proposes (never auto-applied). */
+export interface ProposedEdit {
+  /** Repo-relative POSIX path. */
+  file: string;
+  /** Whole new file contents (companion diffs vs disk). */
+  contents: string;
+  /** Optional one-line rationale from the agent. */
+  why?: string;
+}
+
+export type AgentEvent =
+  | { t: "agent-text"; turnId: string; delta: string }
+  | { t: "agent-thinking"; turnId: string; note: string }
+  | { t: "agent-tool-proposal"; turnId: string; edit: ProposedEdit }
+  | { t: "agent-turn-complete"; turnId: string }
+  | { t: "agent-error"; turnId: string; code: AgentErrorCode; message: string };
+
+/** Companion preflight result for the active provider/transport. */
+export interface AgentStatusMsg {
+  t: "agent-status";
+  ready: boolean;
+  transport: "cli-headless" | "mcp" | "sdk";
+  warnings: string[];
+  blockers: string[];
+}
+export interface AgentStreamMsg {
+  t: "agent-stream";
+  event: AgentEvent;
+}
+export interface ChangesetProposedMsg {
+  t: "changeset-proposed";
+  turnId: string;
+  files: Array<{ file: string; diff: string; bytes: number }>;
+}
+export interface ChangesetAppliedMsg {
+  t: "changeset-applied";
+  turnId: string;
+  files: string[];
+  checkpointRef: string;
+}
+export interface AgentUndoneMsg {
+  t: "agent-undone";
+  turnId: string;
+  restored: string[];
+}
+
+export interface AgentTurnMsg {
+  t: "agent-turn";
+  turnId: string;
+  bundleId: string;
+  userMessage: string;
+}
+export interface AgentDecisionMsg {
+  t: "agent-decision";
+  turnId: string;
+  decision: "approve" | "reject";
+  /** Subset of files to act on; omitted = whole changeset. */
+  files?: string[];
+  reason?: string;
+}
+export interface AgentCancelMsg {
+  t: "agent-cancel";
+  turnId: string;
+}
+export interface AgentUndoMsg {
+  t: "agent-undo";
+  turnId: string;
+}
+
 /** Client→server messages. */
-export type ClientMessage = HelloMsg | PingMsg | CaptureSubmitMsg;
+export type ClientMessage =
+  | HelloMsg
+  | PingMsg
+  | CaptureSubmitMsg
+  | AgentTurnMsg
+  | AgentDecisionMsg
+  | AgentCancelMsg
+  | AgentUndoMsg;
 /** Server→client messages. */
 export type ServerMessage =
   | HelloOkMsg
   | PongMsg
   | ErrorMsg
-  | CaptureResolvedMsg;
+  | CaptureResolvedMsg
+  | AgentStatusMsg
+  | AgentStreamMsg
+  | ChangesetProposedMsg
+  | ChangesetAppliedMsg
+  | AgentUndoneMsg;
 
 export * from "./dom.js";
 export * from "./react-source.js";

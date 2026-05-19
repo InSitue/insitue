@@ -2,6 +2,7 @@
   "name": "insitu",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.30.3",
   "engines": {
@@ -16,7 +17,7 @@
     "demo": "turbo run build && node scripts/demo.mjs",
     "example": "node examples/playground/serve.mjs",
     "test": "turbo run build && pnpm --filter @insitu/companion run test",
-    "license:check": "license-checker --production --onlyAllow 'MIT;MIT OR X11;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense'"
+    "license:check": "license-checker --production --excludePrivatePackages --onlyAllow 'MIT;MIT OR X11;ISC;Apache-2.0;BSD-2-Clause;BSD-3-Clause;0BSD;CC0-1.0;Unlicense'"
   },
   "pnpm": {
     "onlyBuiltDependencies": ["esbuild"]
