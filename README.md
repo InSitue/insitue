@@ -37,16 +37,25 @@ Localhost-first. MIT. See the design/plan in
   local→prod offering is a sink swap, not a rewrite. 29 automated tests
   (`pnpm test`).
 
-The v1 plan is delivered. Deferred by design: the hosted prod widget +
-team features (same `CaptureSink` seam), additional `AgentProvider`s,
-auto-re-capture after HMR — see the plan's Commercialization/Deferred
-sections.
+**Cloud — InSitue Autopilot (`apps/cloud`) ✅ built (D0 + C0–C10).**
+Bug report → verified draft PR. `@insitue/agent-core` (the engine,
+extracted MIT) reused verbatim by a Next.js-on-Vercel app: GitHub-OAuth
+auth + multi-tenant Postgres, public `/v1/capture` ingest
+(origin/schema/dedupe/quota), GitHub-App + Vercel integrations,
+confidence- and verify-gated autopilot run in a Vercel-Sandbox microVM,
+Safe/Standard/YOLO delivery, hybrid Stripe billing, email + Sentry,
+admin/kill-switch, marketing/legal. **Runs entirely on fakes with $0
+spend**; real Claude (G1) and real Stripe (G2) are hard-gated behind
+explicit opt-in. **49 cloud + 31 engine tests green**, CI in
+`.github/workflows/ci.yml`. Go-live = slot creds per the launch
+runbook. The local OSS loop is unchanged.
 
 ## Runbooks
 
 | Topic | Doc |
 |---|---|
 | Agent transports (`--agent-transport`, optional peers, billing) | [`docs/runbooks/insitu-agent-transports.md`](docs/runbooks/insitu-agent-transports.md) |
+| InSitue Cloud go-live (creds, G1/G2 gates, checklist) | [`docs/runbooks/insitue-cloud-launch.md`](docs/runbooks/insitue-cloud-launch.md) |
 
 ## Demo (one command)
 
