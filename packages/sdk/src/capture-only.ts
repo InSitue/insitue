@@ -73,7 +73,7 @@ function CaptureOnlyApp(props: { onCapture?: CaptureOnlyOptions["onCapture"] }) 
   return h(
     "div",
     {
-      style: `position:fixed;bottom:16px;left:16px;z-index:2147483000;display:flex;gap:10px;align-items:center;padding:8px 12px;font:${mono};color:#ececef;background:rgba(15,15,18,0.94);border:1px solid #2e2e3c;border-radius:6px`,
+      style: `position:fixed;bottom:16px;right:16px;z-index:2147483000;display:flex;gap:10px;align-items:center;padding:8px 12px;font:${mono};color:#ececef;background:rgba(15,15,18,0.94);border:1px solid #2e2e3c;border-radius:6px`,
     },
     [
       h("strong", { style: "letter-spacing:0.08em" }, "InSitu"),

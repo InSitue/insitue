@@ -264,8 +264,10 @@ function App(props: { port: number }) {
 
   const pill = {
     position: "fixed",
+    // Bottom-RIGHT: Next.js (and many frameworks) park their dev
+    // indicator bottom-left, so this avoids the overlap by default.
     bottom: "16px",
-    left: "16px",
+    right: "16px",
     zIndex: 2147483000,
     display: "flex",
     alignItems: "center",
@@ -289,7 +291,7 @@ function App(props: { port: number }) {
           style: {
             position: "fixed",
             bottom: "64px",
-            left: "16px",
+            right: "16px",
             width: "440px",
             maxHeight: "70vh",
             overflow: "auto",
