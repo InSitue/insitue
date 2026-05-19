@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>InSitu Playground</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        font: 15px/1.6 ui-sans-serif, system-ui, sans-serif;
+        background: #0b0b0d;
+        color: #ececef;
+        padding: 48px;
+      }
+      main { max-width: 720px; margin: 0 auto; }
+      h1 { font-size: 28px; letter-spacing: -0.02em; }
+      .card {
+        border: 1px solid #232330;
+        background: #0f0f12;
+        padding: 20px;
+        border-radius: 8px;
+        margin-top: 20px;
+      }
+      button.demo {
+        font: inherit;
+        background: #ff6b00;
+        color: #0b0b0d;
+        border: 0;
+        padding: 8px 16px;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      code { color: #ff6b00; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>InSitu Playground</h1>
+      <p>
+        A dependency-free page to exercise the InSitu overlay end-to-end
+        without wiring a real app. The pill (bottom-left) should connect
+        to the companion and <code>Ping</code> should report a round-trip.
+      </p>
+      <div class="card" id="sample-card">
+        <strong>Sample region</strong>
+        <p>
+          In M1 this card / its children become selectable targets; for
+          M0 it's just here so the page isn't empty.
+        </p>
+        <button class="demo" type="button">A button</button>
+      </div>
+      <p style="color: #8a8a93; margin-top: 24px">
+        If the pill stays amber/red: run <code>pnpm companion</code> in
+        another terminal (from the repo root), then reload.
+      </p>
+    </main>
+    <script type="module">
+      import { mountInSitu } from "/sdk/overlay.js";
+      mountInSitu();
+    </script>
+  </body>
+</html>
