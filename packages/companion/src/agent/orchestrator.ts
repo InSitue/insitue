@@ -18,7 +18,7 @@ import type {
 import { ClaudeCodeProvider } from "./claude-code/provider.js";
 import type { AgentProvider, AgentSession } from "./provider.js";
 import { parseProposals, EDIT_START } from "./proposals.js";
-import { buildChangeset } from "../edit/gateway.js";
+import { buildChangeset, pickEdits } from "../edit/gateway.js";
 import { applyEdits } from "../edit/mutator.js";
 import { checkpoint, restore, type Checkpoint } from "../edit/git.js";
 
@@ -220,13 +220,10 @@ export class AgentOrchestrator {
     // independent of whether the (read-only) agent child has finished
     // draining stdout. `busy` only single-flights *turns*.
 
-    // Optional subset: approve only some files of the changeset.
-    const edits =
-      msg.files && msg.files.length
-        ? accepted.filter((e) => msg.files!.includes(e.file))
-        : accepted;
+    // Optional subset: undefined = whole changeset, [] = none.
+    const edits = pickEdits(accepted, msg.files);
     if (!edits.length) {
-      note("approved file set was empty");
+      note("approved file set was empty — nothing written");
       return;
     }
 

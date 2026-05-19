@@ -156,9 +156,10 @@ export class CompanionClient {
     turnId: string,
     decision: "approve" | "reject",
     files?: string[],
+    reason?: string,
   ): void {
     this.ws?.send(
-      JSON.stringify({ t: "agent-decision", turnId, decision, files }),
+      JSON.stringify({ t: "agent-decision", turnId, decision, files, reason }),
     );
   }
 

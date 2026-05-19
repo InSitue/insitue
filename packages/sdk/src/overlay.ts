@@ -63,6 +63,8 @@ function App(props: { port: number }) {
   const [changeTurnId, setChangeTurnId] = useState("");
   const [applied, setApplied] = useState("");
   const [appliedTurnId, setAppliedTurnId] = useState("");
+  const [picked, setPicked] = useState<Record<string, boolean>>({});
+  const [rejectReason, setRejectReason] = useState("");
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -94,8 +96,10 @@ function App(props: { port: number }) {
       onChangeset: (turnId, files) => {
         setChangeTurnId(turnId);
         setChanges(files);
+        setPicked(Object.fromEntries(files.map((f) => [f.file, true])));
+        setRejectReason("");
         setApplied("");
-      setAppliedTurnId("");
+        setAppliedTurnId("");
       },
       onApplied: (turnId, files, ref) => {
         setAppliedTurnId(turnId);
@@ -353,9 +357,15 @@ function App(props: { port: number }) {
                                     {
                                       style: btn,
                                       onClick: () => {
+                                        const chosen = changes
+                                          .map((c) => c.file)
+                                          .filter((f) => picked[f] !== false);
                                         client?.sendDecision(
                                           changeTurnId,
                                           "approve",
+                                          chosen.length === changes.length
+                                            ? undefined
+                                            : chosen,
                                         );
                                       },
                                     },
@@ -369,6 +379,8 @@ function App(props: { port: number }) {
                                         client?.sendDecision(
                                           changeTurnId,
                                           "reject",
+                                          undefined,
+                                          rejectReason.trim() || undefined,
                                         );
                                         setChanges([]);
                                       },
@@ -379,14 +391,43 @@ function App(props: { port: number }) {
                               ),
                             ],
                           ),
+                          h("input", {
+                            value: rejectReason,
+                            placeholder:
+                              "reject reason (optional) — fed back to the agent",
+                            onInput: (ev: Event) =>
+                              setRejectReason(
+                                (ev.target as HTMLInputElement).value,
+                              ),
+                            style:
+                              "width:100%;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:5px 7px;margin:4px 0 6px",
+                          }),
                           ...changes.map((c) =>
                             h("div", { style: "margin:6px 0" }, [
                               h(
-                                "div",
+                                "label",
                                 {
-                                  style: `color:#ececef;margin-bottom:2px`,
+                                  style:
+                                    "color:#ececef;margin-bottom:2px;display:flex;gap:6px;align-items:center;cursor:pointer",
                                 },
-                                `${c.file}  (${c.bytes}B)`,
+                                [
+                                  h("input", {
+                                    type: "checkbox",
+                                    checked: picked[c.file] !== false,
+                                    onChange: (ev: Event) =>
+                                      setPicked((p) => ({
+                                        ...p,
+                                        [c.file]: (
+                                          ev.target as HTMLInputElement
+                                        ).checked,
+                                      })),
+                                  }),
+                                  h(
+                                    "span",
+                                    {},
+                                    `${c.file}  (${c.bytes}B)`,
+                                  ),
+                                ],
                               ),
                               h(
                                 "div",

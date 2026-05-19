@@ -14,6 +14,21 @@ import { safeResolve } from "./sandbox.js";
 const MAX_FILES = 20;
 const MAX_BYTES = 512 * 1024;
 
+/** Which buffered edits an approve decision acts on.
+ *  `files === undefined` → the WHOLE changeset (no per-file selection
+ *  was made). `files === []` → an EXPLICIT empty selection (user
+ *  unchecked everything) → apply nothing. A non-empty list → that
+ *  subset. The undefined-vs-[] distinction is load-bearing: conflating
+ *  them silently wrote files the user had deselected. */
+export function pickEdits<T extends { file: string }>(
+  accepted: T[],
+  files: string[] | undefined,
+): T[] {
+  if (files === undefined) return accepted;
+  const want = new Set(files);
+  return accepted.filter((e) => want.has(e.file));
+}
+
 export interface ChangesetResult {
   files: Array<{ file: string; diff: string; bytes: number }>;
   skipped: Array<{ file: string; reason: string }>;
