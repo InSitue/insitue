@@ -25,8 +25,8 @@ async function token() {
   return (await res.json()).token;
 }
 
-test("protocol v2 is pinned", () => {
-  assert.equal(PROTOCOL_VERSION, 2);
+test("protocol version is pinned (v3 — M3 session msgs)", () => {
+  assert.equal(PROTOCOL_VERSION, 3);
 });
 
 test("authed session announces agent-status, then routes agent-turn", async () => {

@@ -14,8 +14,8 @@
 /** Bump when `CaptureBundle`'s shape changes; sinks branch on it. */
 export const CAPTURE_SCHEMA_VERSION = 1 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
- *  v2: adds the agent edit-loop messages (M2). */
-export const PROTOCOL_VERSION = 2 as const;
+ *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3). */
+export const PROTOCOL_VERSION = 3 as const;
 
 export interface SourceLoc {
   /** Repo-relative POSIX path, e.g. `components/MainBar.tsx`. */
@@ -246,6 +246,26 @@ export interface AgentUndoMsg {
   t: "agent-undo";
   turnId: string;
 }
+/** Undo every checkpoint applied this session (reverse order). */
+export interface AgentUndoSessionMsg {
+  t: "agent-undo-session";
+}
+/** Explicit, user-initiated git commit of ONLY the files InSitu
+ *  applied this session. Never auto; never pushes. */
+export interface AgentCommitSessionMsg {
+  t: "agent-commit-session";
+  message?: string;
+}
+export interface AgentSessionUndoneMsg {
+  t: "agent-session-undone";
+  restored: string[];
+}
+export interface AgentSessionCommittedMsg {
+  t: "agent-session-committed";
+  /** Short commit sha. */
+  commit: string;
+  files: string[];
+}
 
 /** Client→server messages. */
 export type ClientMessage =
@@ -255,7 +275,9 @@ export type ClientMessage =
   | AgentTurnMsg
   | AgentDecisionMsg
   | AgentCancelMsg
-  | AgentUndoMsg;
+  | AgentUndoMsg
+  | AgentUndoSessionMsg
+  | AgentCommitSessionMsg;
 /** Server→client messages. */
 export type ServerMessage =
   | HelloOkMsg
@@ -266,7 +288,9 @@ export type ServerMessage =
   | AgentStreamMsg
   | ChangesetProposedMsg
   | ChangesetAppliedMsg
-  | AgentUndoneMsg;
+  | AgentUndoneMsg
+  | AgentSessionUndoneMsg
+  | AgentSessionCommittedMsg;
 
 export * from "./dom.js";
 export * from "./react-source.js";

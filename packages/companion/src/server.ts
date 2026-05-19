@@ -16,9 +16,11 @@ import { z } from "zod";
 import {
   PROTOCOL_VERSION,
   type AgentCancelMsg,
+  type AgentCommitSessionMsg,
   type AgentDecisionMsg,
   type AgentTurnMsg,
   type AgentUndoMsg,
+  type AgentUndoSessionMsg,
   type CaptureBundle,
   type ServerMessage,
 } from "@insitu/capture-core";
@@ -78,6 +80,11 @@ const clientMessage = z.discriminatedUnion("t", [
   }),
   z.object({ t: z.literal("agent-cancel"), turnId: z.string().min(1) }),
   z.object({ t: z.literal("agent-undo"), turnId: z.string().min(1) }),
+  z.object({ t: z.literal("agent-undo-session") }),
+  z.object({
+    t: z.literal("agent-commit-session"),
+    message: z.string().optional(),
+  }),
 ]);
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -221,6 +228,14 @@ export function startCompanion(opts: CompanionOptions): Server {
           orchestrator?.handleCancel(msg as unknown as AgentCancelMsg);
         } else if (msg.t === "agent-undo") {
           orchestrator?.handleUndo(msg as unknown as AgentUndoMsg);
+        } else if (msg.t === "agent-undo-session") {
+          orchestrator?.handleUndoSession(
+            msg as unknown as AgentUndoSessionMsg,
+          );
+        } else if (msg.t === "agent-commit-session") {
+          orchestrator?.handleCommitSession(
+            msg as unknown as AgentCommitSessionMsg,
+          );
         }
       });
     });

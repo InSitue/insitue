@@ -35,6 +35,8 @@ export interface ClientEvents {
   ): void;
   onApplied?(turnId: string, files: string[], checkpointRef: string): void;
   onUndone?(turnId: string, restored: string[]): void;
+  onSessionUndone?(restored: string[]): void;
+  onSessionCommitted?(commit: string, files: string[]): void;
 }
 
 export class CompanionClient {
@@ -99,6 +101,10 @@ export class CompanionClient {
           );
         } else if (msg.t === "agent-undone") {
           this.events.onUndone?.(msg.turnId, msg.restored);
+        } else if (msg.t === "agent-session-undone") {
+          this.events.onSessionUndone?.(msg.restored);
+        } else if (msg.t === "agent-session-committed") {
+          this.events.onSessionCommitted?.(msg.commit, msg.files);
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
@@ -165,6 +171,14 @@ export class CompanionClient {
 
   sendUndo(turnId: string): void {
     this.ws?.send(JSON.stringify({ t: "agent-undo", turnId }));
+  }
+
+  sendUndoSession(): void {
+    this.ws?.send(JSON.stringify({ t: "agent-undo-session" }));
+  }
+
+  sendCommitSession(message?: string): void {
+    this.ws?.send(JSON.stringify({ t: "agent-commit-session", message }));
   }
 
   dispose(): void {

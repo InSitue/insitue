@@ -7,9 +7,11 @@
  */
 import type {
   AgentCancelMsg,
+  AgentCommitSessionMsg,
   AgentDecisionMsg,
   AgentTurnMsg,
   AgentUndoMsg,
+  AgentUndoSessionMsg,
   CaptureBundle,
   ProposedEdit,
   ResolvedSource,
@@ -20,7 +22,12 @@ import type { AgentProvider, AgentSession } from "./provider.js";
 import { parseProposals, EDIT_START } from "./proposals.js";
 import { buildChangeset, pickEdits } from "../edit/gateway.js";
 import { applyEdits } from "../edit/mutator.js";
-import { checkpoint, restore, type Checkpoint } from "../edit/git.js";
+import {
+  checkpoint,
+  restore,
+  commitFiles,
+  type Checkpoint,
+} from "../edit/git.js";
 
 export interface OrchestratorDeps {
   root: string;
@@ -40,8 +47,12 @@ export class AgentOrchestrator {
   /** turnId → the proposed edits that passed the dry-run, awaiting an
    *  approve/reject decision. Cleared once decided. */
   private readonly pending = new Map<string, ProposedEdit[]>();
-  /** turnId → pre-write checkpoint, kept for P5 `agent-undo`. */
+  /** turnId → pre-write checkpoint, for `agent-undo`. Insertion order
+   *  is session order — `agent-undo-session` walks it in reverse. */
   private readonly checkpoints = new Map<string, Checkpoint>();
+  /** turnId → files applied by that turn (for commit-session union;
+   *  an entry is dropped when that turn is individually undone). */
+  private readonly sessionFiles = new Map<string, string[]>();
   private session: AgentSession | null = null;
   private busy = false;
 
@@ -236,6 +247,7 @@ export class AgentOrchestrator {
       const res = applyEdits(this.deps.root, edits);
       if (res.written.length) {
         this.checkpoints.set(msg.turnId, cp);
+        this.sessionFiles.set(msg.turnId, res.written);
         this.deps.send({
           t: "changeset-applied",
           turnId: msg.turnId,
@@ -279,6 +291,7 @@ export class AgentOrchestrator {
     try {
       const restored = await restore(this.deps.root, cp);
       this.checkpoints.delete(msg.turnId); // single-shot
+      this.sessionFiles.delete(msg.turnId);
       this.deps.send({
         t: "agent-undone",
         turnId: msg.turnId,
@@ -294,6 +307,72 @@ export class AgentOrchestrator {
           message: `undo failed: ${(e as Error).message}`,
         },
       });
+    }
+  }
+
+  handleUndoSession(_msg: AgentUndoSessionMsg): void {
+    void this.runUndoSession();
+  }
+
+  private async runUndoSession(): Promise<void> {
+    // Reverse chronological: undo the most recent application first so
+    // overlapping edits to the same file peel back correctly.
+    const entries = [...this.checkpoints.entries()].reverse();
+    const restored: string[] = [];
+    for (const [turnId, cp] of entries) {
+      try {
+        const r = await restore(this.deps.root, cp);
+        restored.push(...r);
+        this.checkpoints.delete(turnId);
+        this.sessionFiles.delete(turnId);
+      } catch {
+        /* keep going — best-effort session rollback */
+      }
+    }
+    this.deps.send({
+      t: "agent-session-undone",
+      restored: [...new Set(restored)],
+    });
+  }
+
+  handleCommitSession(msg: AgentCommitSessionMsg): void {
+    void this.runCommitSession(msg);
+  }
+
+  private async runCommitSession(
+    msg: AgentCommitSessionMsg,
+  ): Promise<void> {
+    const files = [...new Set([...this.sessionFiles.values()].flat())];
+    const fail = (m: string) =>
+      this.deps.send({
+        t: "agent-stream",
+        event: {
+          t: "agent-error",
+          turnId: "session",
+          code: "internal",
+          message: `commit-session: ${m}`,
+        },
+      });
+    if (!files.length) {
+      fail("nothing applied this session to commit");
+      return;
+    }
+    try {
+      const { commit, files: committed } = await commitFiles(
+        this.deps.root,
+        files,
+        msg.message?.trim() || "InSitu session changes",
+      );
+      // Committed = durable; a later undo of these would fight git.
+      this.checkpoints.clear();
+      this.sessionFiles.clear();
+      this.deps.send({
+        t: "agent-session-committed",
+        commit,
+        files: committed,
+      });
+    } catch (e) {
+      fail((e as Error).message);
     }
   }
 }

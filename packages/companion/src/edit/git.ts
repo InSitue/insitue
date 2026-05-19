@@ -81,6 +81,42 @@ export async function checkpoint(
   return { ref, kind: "fs", entries };
 }
 
+/** Commit ONLY the given paths — a surgical pathspec commit that
+ *  ignores the index and any other working-tree changes. Never pushes.
+ *  Explicit + user-initiated (the "commit session" button); InSitu
+ *  never auto-commits. Returns the short sha. */
+export async function commitFiles(
+  root: string,
+  files: string[],
+  message: string,
+): Promise<{ commit: string; files: string[] }> {
+  if (!(await isGitRepo(root))) {
+    throw new Error("not a git repository — cannot commit");
+  }
+  const paths = [...new Set(files)].filter(Boolean);
+  if (!paths.length) throw new Error("no files to commit");
+  // Stage exactly these paths, then commit exactly these pathspecs so
+  // unrelated staged/working changes are untouched.
+  await execa("git", ["-C", root, "add", "--", ...paths]);
+  await execa(
+    "git",
+    [
+      "-C",
+      root,
+      "-c",
+      "core.hooksPath=/dev/null", // don't run the host's commit hooks
+      "commit",
+      "-m",
+      message,
+      "--",
+      ...paths,
+    ],
+    { reject: false },
+  );
+  const sha = await execa("git", ["-C", root, "rev-parse", "--short", "HEAD"]);
+  return { commit: String(sha.stdout).trim(), files: paths };
+}
+
 /** P5 wires this to `agent-undo`; defined here so the checkpoint
  *  format and its inverse stay together and round-trip-testable now. */
 export async function restore(

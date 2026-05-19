@@ -65,6 +65,9 @@ function App(props: { port: number }) {
   const [appliedTurnId, setAppliedTurnId] = useState("");
   const [picked, setPicked] = useState<Record<string, boolean>>({});
   const [rejectReason, setRejectReason] = useState("");
+  const [sessionN, setSessionN] = useState(0);
+  const [commitMsg, setCommitMsg] = useState("");
+  const [sessionNote, setSessionNote] = useState("");
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -107,11 +110,28 @@ function App(props: { port: number }) {
           `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR should reload; re-select to verify`,
         );
         setChanges([]);
+        setSessionN((n) => n + 1);
+        setSessionNote("");
       },
       onUndone: (_t, restored) => {
         setAppliedTurnId("");
         setApplied(
           `undone — restored ${restored.length} file${restored.length > 1 ? "s" : ""}; host HMR should revert`,
+        );
+        setSessionN((n) => Math.max(0, n - 1));
+      },
+      onSessionUndone: (restored) => {
+        setSessionN(0);
+        setAppliedTurnId("");
+        setApplied("");
+        setSessionNote(
+          `session undone — restored ${restored.length} file${restored.length > 1 ? "s" : ""}; host HMR should revert`,
+        );
+      },
+      onSessionCommitted: (commit, files) => {
+        setSessionN(0);
+        setSessionNote(
+          `committed ${files.length} file${files.length > 1 ? "s" : ""} as ${commit} (local only — not pushed)`,
         );
       },
     });
@@ -462,6 +482,83 @@ function App(props: { port: number }) {
                                       client?.sendUndo(appliedTurnId),
                                   },
                                   "Undo",
+                                )
+                              : null,
+                          ],
+                        )
+                      : null,
+                    sessionN > 0 || sessionNote
+                      ? h(
+                          "div",
+                          {
+                            style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
+                          },
+                          [
+                            h(
+                              "div",
+                              {
+                                style: `color:#ff6b00;margin-bottom:4px;display:flex;justify-content:space-between;align-items:center`,
+                              },
+                              [
+                                h(
+                                  "span",
+                                  {},
+                                  `SESSION · ${sessionN} applied`,
+                                ),
+                                sessionN > 0
+                                  ? h(
+                                      "button",
+                                      {
+                                        style: `${btn};color:${muted}`,
+                                        onClick: () =>
+                                          client?.sendUndoSession(),
+                                      },
+                                      "Undo all",
+                                    )
+                                  : null,
+                              ],
+                            ),
+                            sessionN > 0
+                              ? h(
+                                  "div",
+                                  {
+                                    style:
+                                      "display:flex;gap:6px;align-items:center",
+                                  },
+                                  [
+                                    h("input", {
+                                      value: commitMsg,
+                                      placeholder:
+                                        "commit message (optional)",
+                                      onInput: (ev: Event) =>
+                                        setCommitMsg(
+                                          (ev.target as HTMLInputElement)
+                                            .value,
+                                        ),
+                                      style:
+                                        "flex:1;box-sizing:border-box;font:inherit;color:#ececef;background:#0b0b0d;border:1px solid #232330;border-radius:4px;padding:5px 7px",
+                                    }),
+                                    h(
+                                      "button",
+                                      {
+                                        style: btn,
+                                        onClick: () =>
+                                          client?.sendCommitSession(
+                                            commitMsg.trim() || undefined,
+                                          ),
+                                      },
+                                      "Commit (local)",
+                                    ),
+                                  ],
+                                )
+                              : null,
+                            sessionNote
+                              ? h(
+                                  "div",
+                                  {
+                                    style: `color:#5fd18a;margin-top:6px`,
+                                  },
+                                  sessionNote,
                                 )
                               : null,
                           ],
