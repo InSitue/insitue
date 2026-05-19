@@ -15,7 +15,7 @@ Localhost-first. MIT. See the design/plan in
 | `@insitu/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
 | `@insitu/sdk` | Dev-only `<InSitu />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
 
-## Status — M2 (agent edit loop) ✅
+## Status — M3 (safety / polish) ✅
 
 - **M0** trust boundary: `127.0.0.1`-only bind, `Origin` allowlist, per-session
   token, pinned protocol, prod-build refusal.
@@ -25,10 +25,14 @@ Localhost-first. MIT. See the design/plan in
   per-file **dry-run diff** → **Approve & write** (atomic, sandboxed) → ride
   host HMR → **Undo** (git-checkpoint, byte-exact restore). Three Claude Code
   transports (`cli-headless` default, `mcp`, `sdk`) behind one provider seam;
-  Max-billing protected by env scrub. 20 automated tests (`pnpm test`).
+  Max-billing protected by env scrub.
+- **M3** safety/polish: reject-with-reason + per-file approve subset;
+  session model — **Undo all** + surgical **Commit (local)** (protocol v3);
+  compile/runtime-error **feedback loop** (re-capture → agent fixes its own
+  change); streaming elapsed/thinking + a **real** HMR-settle signal. 26
+  automated tests (`pnpm test`).
 
-Next: **M3** — approve/reject-with-reason polish, compile-error feedback loop,
-streaming UI; **M4** — prod capture-only seam validation.
+Next: **M4** — prod capture-only seam validation (de-risk; not shipped).
 
 ## Runbooks
 
