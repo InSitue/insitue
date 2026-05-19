@@ -20,7 +20,7 @@ import type { AgentProvider, AgentSession } from "./provider.js";
 import { parseProposals, EDIT_START } from "./proposals.js";
 import { buildChangeset } from "../edit/gateway.js";
 import { applyEdits } from "../edit/mutator.js";
-import { checkpoint, type Checkpoint } from "../edit/git.js";
+import { checkpoint, restore, type Checkpoint } from "../edit/git.js";
 
 export interface OrchestratorDeps {
   root: string;
@@ -262,7 +262,41 @@ export class AgentOrchestrator {
     this.session?.cancel();
     this.busy = false;
   }
-  handleUndo(_msg: AgentUndoMsg): void {
-    /* P5: restore(this.deps.root, this.checkpoints.get(msg.turnId)) */
+  handleUndo(msg: AgentUndoMsg): void {
+    void this.runUndo(msg);
+  }
+
+  private async runUndo(msg: AgentUndoMsg): Promise<void> {
+    const cp = this.checkpoints.get(msg.turnId);
+    if (!cp) {
+      this.deps.send({
+        t: "agent-stream",
+        event: {
+          t: "agent-text",
+          turnId: msg.turnId,
+          delta: "\n[insitu] nothing to undo for this turn",
+        },
+      });
+      return;
+    }
+    try {
+      const restored = await restore(this.deps.root, cp);
+      this.checkpoints.delete(msg.turnId); // single-shot
+      this.deps.send({
+        t: "agent-undone",
+        turnId: msg.turnId,
+        restored,
+      });
+    } catch (e) {
+      this.deps.send({
+        t: "agent-stream",
+        event: {
+          t: "agent-error",
+          turnId: msg.turnId,
+          code: "internal",
+          message: `undo failed: ${(e as Error).message}`,
+        },
+      });
+    }
   }
 }

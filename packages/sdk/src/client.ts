@@ -34,6 +34,7 @@ export interface ClientEvents {
     files: Array<{ file: string; diff: string; bytes: number }>,
   ): void;
   onApplied?(turnId: string, files: string[], checkpointRef: string): void;
+  onUndone?(turnId: string, restored: string[]): void;
 }
 
 export class CompanionClient {
@@ -96,6 +97,8 @@ export class CompanionClient {
             msg.files,
             msg.checkpointRef,
           );
+        } else if (msg.t === "agent-undone") {
+          this.events.onUndone?.(msg.turnId, msg.restored);
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
@@ -157,6 +160,10 @@ export class CompanionClient {
     this.ws?.send(
       JSON.stringify({ t: "agent-decision", turnId, decision, files }),
     );
+  }
+
+  sendUndo(turnId: string): void {
+    this.ws?.send(JSON.stringify({ t: "agent-undo", turnId }));
   }
 
   dispose(): void {

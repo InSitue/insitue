@@ -97,8 +97,14 @@ export async function restore(
       continue;
     }
     if (cp.kind === "git" && e.blob) {
-      const r = await execa("git", ["-C", root, "cat-file", "-p", e.blob]);
-      writeFileSync(abs, r.stdout as string);
+      // `git cat-file -p` is the exact blob bytes — execa trims the
+      // final newline by default, which would corrupt files that end
+      // in one. Keep the buffer verbatim.
+      const r = await execa("git", ["-C", root, "cat-file", "-p", e.blob], {
+        stripFinalNewline: false,
+        encoding: "buffer",
+      });
+      writeFileSync(abs, r.stdout as Uint8Array);
       restored.push(e.file);
     } else if (cp.kind === "fs" && e.backup && existsSync(e.backup)) {
       copyFileSync(e.backup, abs);

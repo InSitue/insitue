@@ -8,6 +8,8 @@ import { execa } from "execa";
 import type { AgentProvider, AgentSession, PreflightResult } from "../provider.js";
 import { apiKeyVarsPresent, scrubbedEnv } from "../env.js";
 import { ClaudeCliSession } from "./transport-cli.js";
+import { ClaudeMcpSession } from "./transport-mcp.js";
+import { ClaudeSdkSession, sdkAvailable } from "./transport-sdk.js";
 
 export type ClaudeTransport = "cli-headless" | "mcp" | "sdk";
 
@@ -25,21 +27,27 @@ export class ClaudeCodeProvider implements AgentProvider {
     const warnings: string[] = [];
     const blockers: string[] = [];
 
-    if (this.opts.transport !== "cli-headless") {
+    // `sdk` is the only transport that doesn't shell out to `claude`.
+    const needsCli = this.opts.transport !== "sdk";
+
+    if (this.opts.transport === "sdk" && !sdkAvailable()) {
       blockers.push(
-        `transport "${this.opts.transport}" arrives in M2-P5 — use cli-headless`,
+        "transport sdk: @anthropic-ai/claude-agent-sdk not installed — " +
+          "`pnpm add -D @anthropic-ai/claude-agent-sdk` or use cli-headless",
       );
     }
 
-    // `claude` present?
+    // `claude` present? (cli-headless + mcp spawn it)
     let version = "";
-    try {
-      const r = await execa("claude", ["--version"], { timeout: 8000 });
-      version = r.stdout.trim();
-    } catch {
-      blockers.push(
-        "`claude` CLI not found on PATH — install Claude Code, then `claude login`",
-      );
+    if (needsCli) {
+      try {
+        const r = await execa("claude", ["--version"], { timeout: 8000 });
+        version = r.stdout.trim();
+      } catch {
+        blockers.push(
+          "`claude` CLI not found on PATH — install Claude Code, then `claude login`",
+        );
+      }
     }
 
     // API-key billing footgun.
@@ -64,16 +72,29 @@ export class ClaudeCodeProvider implements AgentProvider {
   }
 
   startSession(): Promise<AgentSession> {
-    if (this.opts.transport !== "cli-headless") {
-      return Promise.reject(
-        new Error(`transport "${this.opts.transport}" arrives in M2-P5`),
-      );
+    const { root, allowApiKey, transport } = this.opts;
+    switch (transport) {
+      case "cli-headless":
+        return Promise.resolve(
+          new ClaudeCliSession({ root, env: scrubbedEnv(allowApiKey) }),
+        );
+      case "mcp":
+        return Promise.resolve(
+          new ClaudeMcpSession({ root, env: scrubbedEnv(allowApiKey) }),
+        );
+      case "sdk":
+        if (!sdkAvailable()) {
+          return Promise.reject(
+            new Error(
+              "@anthropic-ai/claude-agent-sdk not installed (transport sdk)",
+            ),
+          );
+        }
+        return Promise.resolve(new ClaudeSdkSession({ root, allowApiKey }));
+      default:
+        return Promise.reject(
+          new Error(`unknown transport "${transport as string}"`),
+        );
     }
-    return Promise.resolve(
-      new ClaudeCliSession({
-        root: this.opts.root,
-        env: scrubbedEnv(this.opts.allowApiKey),
-      }),
-    );
   }
 }

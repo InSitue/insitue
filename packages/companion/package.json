@@ -10,8 +10,8 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff",
-    "dev": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --watch --external ws --external commander --external zod --external execa --external diff",
+    "build": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
+    "dev": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --watch --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
     "start": "node dist/cli.js",
     "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
@@ -19,11 +19,18 @@
   },
   "dependencies": {
     "@insitu/capture-core": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0",
     "diff": "^9.0.0",
     "execa": "^9.5.2",
     "ws": "^8.18.0",
     "zod": "^3.23.8"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/claude-agent-sdk": { "optional": true }
   },
   "devDependencies": {
     "@types/ws": "^8.5.13",

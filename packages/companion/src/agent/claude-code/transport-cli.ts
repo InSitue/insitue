@@ -13,6 +13,7 @@ import { execa } from "execa";
 import type { AgentEvent } from "@insitu/capture-core";
 import type { AgentSession, AgentSessionInput } from "../provider.js";
 import { buildPrompt } from "../context.js";
+import { normalizeNative, type NativeMessage } from "./normalize.js";
 
 export interface CliSessionOpts {
   root: string;
@@ -58,37 +59,17 @@ export class ClaudeCliSession implements AgentSession {
       for await (const line of rl) {
         const trimmed = line.trim();
         if (!trimmed) continue;
-        let msg: unknown;
+        let msg: NativeMessage;
         try {
-          msg = JSON.parse(trimmed);
+          msg = JSON.parse(trimmed) as NativeMessage;
         } catch {
           continue; // tolerant: skip diagnostic / partial noise
         }
-        const m = msg as {
-          type?: string;
-          subtype?: string;
-          is_error?: boolean;
-          result?: string;
-          message?: { content?: Array<{ type?: string; text?: string }> };
-        };
-        if (m.type === "assistant" && m.message?.content) {
-          for (const block of m.message.content) {
-            if (block.type === "text" && block.text) {
-              onEvent({ t: "agent-text", turnId, delta: block.text });
-            }
+        for (const ev of normalizeNative(msg, turnId)) {
+          if (ev.t === "agent-turn-complete" || ev.t === "agent-error") {
+            sawResult = true;
           }
-        } else if (m.type === "result") {
-          sawResult = true;
-          if (m.is_error) {
-            onEvent({
-              t: "agent-error",
-              turnId,
-              code: "transport",
-              message: m.result || m.subtype || "claude reported an error",
-            });
-          } else {
-            onEvent({ t: "agent-turn-complete", turnId });
-          }
+          onEvent(ev);
         }
       }
     }

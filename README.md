@@ -15,15 +15,26 @@ Localhost-first. MIT. See the design/plan in
 | `@insitu/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
 | `@insitu/sdk` | Dev-only `<InSitu />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
 
-## Status — M0 (walking skeleton + trust boundary) ✅
+## Status — M2 (agent edit loop) ✅
 
-- Monorepo (pnpm + Turborepo), MIT, all-permissive deps.
-- Secure handshake: `127.0.0.1`-only bind, `Origin` allowlist (anti DNS-rebind),
-  per-session token, pinned protocol version, prod-build refusal.
-- Overlay pill with live connection status + secure **ping** round-trip.
-- 7 automated trust-boundary tests pass (`pnpm test`).
+- **M0** trust boundary: `127.0.0.1`-only bind, `Origin` allowlist, per-session
+  token, pinned protocol, prod-build refusal.
+- **M1** select → DOM→source (React fiber + Babel fallback) → `CaptureBundle`
+  with screenshot/styles/runtime + companion-resolved source span.
+- **M2** the full loop: pick → **ask in situ** → grounded answer → propose →
+  per-file **dry-run diff** → **Approve & write** (atomic, sandboxed) → ride
+  host HMR → **Undo** (git-checkpoint, byte-exact restore). Three Claude Code
+  transports (`cli-headless` default, `mcp`, `sdk`) behind one provider seam;
+  Max-billing protected by env scrub. 20 automated tests (`pnpm test`).
 
-Next: **M1** — element/region picker + DOM→source resolution + `CaptureBundle`.
+Next: **M3** — approve/reject-with-reason polish, compile-error feedback loop,
+streaming UI; **M4** — prod capture-only seam validation.
+
+## Runbooks
+
+| Topic | Doc |
+|---|---|
+| Agent transports (`--agent-transport`, optional peers, billing) | [`docs/runbooks/insitu-agent-transports.md`](docs/runbooks/insitu-agent-transports.md) |
 
 ## Demo (one command)
 

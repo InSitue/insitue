@@ -62,6 +62,7 @@ function App(props: { port: number }) {
   >([]);
   const [changeTurnId, setChangeTurnId] = useState("");
   const [applied, setApplied] = useState("");
+  const [appliedTurnId, setAppliedTurnId] = useState("");
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -94,12 +95,20 @@ function App(props: { port: number }) {
         setChangeTurnId(turnId);
         setChanges(files);
         setApplied("");
+      setAppliedTurnId("");
       },
-      onApplied: (_t, files, ref) => {
+      onApplied: (turnId, files, ref) => {
+        setAppliedTurnId(turnId);
         setApplied(
           `applied ${files.length} file${files.length > 1 ? "s" : ""} · checkpoint ${ref} — host HMR should reload; re-select to verify`,
         );
         setChanges([]);
+      },
+      onUndone: (_t, restored) => {
+        setAppliedTurnId("");
+        setApplied(
+          `undone — restored ${restored.length} file${restored.length > 1 ? "s" : ""}; host HMR should revert`,
+        );
       },
     });
     setClient(c);
@@ -119,6 +128,7 @@ function App(props: { port: number }) {
       setReply("");
       setChanges([]);
       setApplied("");
+      setAppliedTurnId("");
       setNote("resolving…");
       setOpen(true);
       client.submitCapture(b);
@@ -394,9 +404,26 @@ function App(props: { port: number }) {
                       ? h(
                           "div",
                           {
-                            style: `color:#5fd18a;margin-top:8px;border-top:1px solid #232330;padding-top:8px`,
+                            style: `margin-top:8px;border-top:1px solid #232330;padding-top:8px;display:flex;gap:8px;align-items:center;justify-content:space-between`,
                           },
-                          applied,
+                          [
+                            h(
+                              "span",
+                              { style: "color:#5fd18a" },
+                              applied,
+                            ),
+                            appliedTurnId
+                              ? h(
+                                  "button",
+                                  {
+                                    style: btn,
+                                    onClick: () =>
+                                      client?.sendUndo(appliedTurnId),
+                                  },
+                                  "Undo",
+                                )
+                              : null,
+                          ],
                         )
                       : null,
                   ],
