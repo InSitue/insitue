@@ -5,3 +5,9 @@ dist/
 .DS_Store
 .insitu/
 *.log
+
+# secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+.vercel
