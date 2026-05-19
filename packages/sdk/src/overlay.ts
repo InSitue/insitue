@@ -5,7 +5,11 @@
  */
 import { h, render } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import type { CaptureBundle, ResolvedSource } from "@insitu/capture-core";
+import type {
+  CaptureBundle,
+  ResolvedSource,
+  SelectionInput,
+} from "@insitu/capture-core";
 import { CompanionClient, type ConnState } from "./client.js";
 import { installRuntimeCollectors } from "./runtime.js";
 import { beginPick } from "./picker.js";
@@ -68,6 +72,8 @@ function App(props: { port: number }) {
   const [sessionN, setSessionN] = useState(0);
   const [commitMsg, setCommitMsg] = useState("");
   const [sessionNote, setSessionNote] = useState("");
+  const [lastSel, setLastSel] = useState<SelectionInput | null>(null);
+  const [loopNote, setLoopNote] = useState("");
 
   useEffect(() => {
     installRuntimeCollectors();
@@ -146,6 +152,7 @@ function App(props: { port: number }) {
     try {
       const sel = await beginPick(mode);
       if (!sel) return;
+      setLastSel(sel);
       const b = await buildBundle(sel);
       setBundle(b);
       setResolved(null);
@@ -153,6 +160,7 @@ function App(props: { port: number }) {
       setChanges([]);
       setApplied("");
       setAppliedTurnId("");
+      setLoopNote("");
       setNote("resolving…");
       setOpen(true);
       client.submitCapture(b);
@@ -169,6 +177,44 @@ function App(props: { port: number }) {
     setApplied("");
     setTurnBusy(true);
     client.sendTurn(turnId, bundle.id, chatInput.trim());
+  };
+
+  // Compile/runtime-error feedback loop: after an apply + HMR, the host
+  // may now be throwing. Re-capture the SAME selection (fresh
+  // runtime.errors), and if errors are present, auto-send a follow-up
+  // turn so the agent fixes its own change — the fix still goes through
+  // the normal propose → diff → approve gate.
+  const recaptureContinue = async () => {
+    if (!client || !lastSel || busy || turnBusy) return;
+    setBusy(true);
+    try {
+      const b = await buildBundle(lastSel);
+      setBundle(b);
+      setResolved(null);
+      setNote("resolving…");
+      setApplied("");
+      setAppliedTurnId("");
+      client.submitCapture(b);
+      const errs = b.runtime.errors.length;
+      if (errs > 0) {
+        const turnId = `turn_${Date.now().toString(36)}`;
+        setReply("");
+        setChanges([]);
+        setLoopNote(
+          `re-captured: ${errs} runtime error${errs > 1 ? "s" : ""} — asking the agent to fix its change`,
+        );
+        setTurnBusy(true);
+        client.sendTurn(
+          turnId,
+          b.id,
+          "Your previous edit was applied but the running app now reports the runtime errors shown in the context above. Diagnose the cause and propose a corrected edit.",
+        );
+      } else {
+        setLoopNote("re-captured — no runtime errors detected");
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const pill = {
@@ -473,18 +519,47 @@ function App(props: { port: number }) {
                               { style: "color:#5fd18a" },
                               applied,
                             ),
-                            appliedTurnId
-                              ? h(
-                                  "button",
-                                  {
-                                    style: btn,
-                                    onClick: () =>
-                                      client?.sendUndo(appliedTurnId),
-                                  },
-                                  "Undo",
-                                )
-                              : null,
+                            h(
+                              "span",
+                              {
+                                style:
+                                  "display:flex;gap:6px;align-items:center",
+                              },
+                              [
+                                lastSel
+                                  ? h(
+                                      "button",
+                                      {
+                                        style: btn,
+                                        onClick: () =>
+                                          void recaptureContinue(),
+                                      },
+                                      "Re-capture & continue",
+                                    )
+                                  : null,
+                                appliedTurnId
+                                  ? h(
+                                      "button",
+                                      {
+                                        style: btn,
+                                        onClick: () =>
+                                          client?.sendUndo(appliedTurnId),
+                                      },
+                                      "Undo",
+                                    )
+                                  : null,
+                              ],
+                            ),
                           ],
+                        )
+                      : null,
+                    loopNote
+                      ? h(
+                          "div",
+                          {
+                            style: `color:${muted};margin-top:6px`,
+                          },
+                          loopNote,
                         )
                       : null,
                     sessionN > 0 || sessionNote
