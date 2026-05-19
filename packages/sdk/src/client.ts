@@ -5,6 +5,8 @@
  */
 import {
   PROTOCOL_VERSION,
+  type CaptureBundle,
+  type ResolvedSource,
   type ServerMessage,
 } from "@insitu/capture-core";
 
@@ -12,6 +14,11 @@ export type ConnState = "idle" | "connecting" | "connected" | "error";
 
 export interface ClientEvents {
   onState(state: ConnState, detail?: string): void;
+  onResolved?(
+    id: string,
+    resolved: ResolvedSource | null,
+    note: string,
+  ): void;
 }
 
 export class CompanionClient {
@@ -57,6 +64,8 @@ export class CompanionClient {
             this.pending.delete(msg.nonce);
             cb(performance.now() - Number(msg.nonce.split(":")[1]));
           }
+        } else if (msg.t === "capture-resolved") {
+          this.events.onResolved?.(msg.id, msg.resolved, msg.note);
         } else if (msg.t === "error") {
           this.events.onState("error", `${msg.code}: ${msg.message}`);
           done();
@@ -86,6 +95,13 @@ export class CompanionClient {
         if (this.pending.delete(nonce)) reject(new Error("ping timeout"));
       }, 3000);
     });
+  }
+
+  submitCapture(bundle: CaptureBundle): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify({ t: "capture", bundle }));
+    return true;
   }
 
   dispose(): void {

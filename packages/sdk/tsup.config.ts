@@ -10,10 +10,10 @@ import { defineConfig } from "tsup";
  * already has React.
  */
 export default defineConfig({
-  entry: ["src/index.ts", "src/overlay.ts"],
+  entry: ["src/index.ts", "src/overlay.ts", "src/babel.ts"],
   format: ["esm"],
   dts: true,
   clean: true,
   external: ["react"],
-  noExternal: ["preact", /^preact\//, "@insitu/capture-core"],
+  noExternal: ["preact", /^preact\//, "@insitu/capture-core", "html-to-image"],
 });

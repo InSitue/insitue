@@ -26,12 +26,24 @@ program
       process.exit(1);
     }
     const root = resolve(opts.root);
+    let server;
     try {
-      startCompanion({ port, origins: opts.origin, root });
+      server = startCompanion({ port, origins: opts.origin, root });
     } catch (err) {
       console.error((err as Error).message);
       process.exit(1);
     }
+    server.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") {
+        console.error(
+          `[insitu] port ${port} is already in use — another companion running? ` +
+            `Stop it or pass \`--port <n>\`.`,
+        );
+      } else {
+        console.error(`[insitu] server error: ${err.message}`);
+      }
+      process.exit(1);
+    });
     console.log(
       `[insitu] companion ${COMPANION_VERSION} on 127.0.0.1:${port}\n` +
         `[insitu] scoped to ${root}\n` +

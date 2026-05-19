@@ -1,6 +1,7 @@
 /**
- * Minimal `process.env` shim — the SDK is browser code but reads
- * `process.env.NODE_ENV`, which bundlers (Next/Vite/webpack) replace
- * statically. Avoids pulling Node globals into a browser package.
+ * `process` is provided by `@types/node` (in tsconfig `types`).
+ * Browser code only reads `process.env.NODE_ENV`, which bundlers
+ * (Vite/Next/webpack) replace statically; `typeof process` guards the
+ * Vite case where it's undefined at runtime. No declarations needed.
  */
-declare const process: { env: Record<string, string | undefined> };
+export {};

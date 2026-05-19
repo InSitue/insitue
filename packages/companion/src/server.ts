@@ -15,8 +15,10 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
   PROTOCOL_VERSION,
+  type CaptureBundle,
   type ServerMessage,
 } from "@insitu/capture-core";
+import { resolveCapture } from "./capture.js";
 
 export const COMPANION_VERSION = "0.0.0";
 
@@ -42,6 +44,14 @@ const clientMessage = z.discriminatedUnion("t", [
     token: z.string().min(1),
   }),
   z.object({ t: z.literal("ping"), nonce: z.string().min(1) }),
+  z.object({
+    t: z.literal("capture"),
+    // Bundle is large/nested; validate only what we act on, pass the
+    // rest through untouched.
+    bundle: z
+      .object({ id: z.string().min(1) })
+      .passthrough(),
+  }),
 ]);
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -150,6 +160,18 @@ export function startCompanion(opts: CompanionOptions): Server {
         }
         if (msg.t === "ping") {
           send(ws, { t: "pong", nonce: msg.nonce });
+          return;
+        }
+        if (msg.t === "capture") {
+          const bundle = msg.bundle as unknown as CaptureBundle;
+          const { resolved, note } = resolveCapture(opts.root, bundle);
+          console.log(`[insitu] capture ${bundle.id}: ${note}`);
+          send(ws, {
+            t: "capture-resolved",
+            id: bundle.id,
+            resolved,
+            note,
+          });
         }
       });
     });

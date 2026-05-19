@@ -14,7 +14,12 @@ export interface InSituProps {
 
 export function InSitu({ port }: InSituProps): null {
   useEffect(() => {
-    if (process.env.NODE_ENV !== "development") return;
+    // Bail only when explicitly a production build. `process` is
+    // undefined in some bundlers (Vite) — treat unknown as dev so the
+    // tool works everywhere; hosts still gate the import in prod.
+    const nodeEnv =
+      typeof process !== "undefined" ? process.env?.NODE_ENV : undefined;
+    if (nodeEnv === "production") return;
     let active = true;
     let dispose: (() => void) | undefined;
     void import("./overlay.js").then((m) => {

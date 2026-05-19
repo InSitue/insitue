@@ -16,6 +16,10 @@
     "./overlay": {
       "types": "./dist/overlay.d.ts",
       "import": "./dist/overlay.js"
+    },
+    "./babel": {
+      "types": "./dist/babel.d.ts",
+      "import": "./dist/babel.js"
     }
   },
   "files": ["dist"],
@@ -33,9 +37,11 @@
   },
   "dependencies": {
     "@insitu/capture-core": "workspace:*",
+    "html-to-image": "^1.11.13",
     "preact": "^10.25.1"
   },
   "devDependencies": {
+    "@types/node": "^22.9.0",
     "@types/react": "^19.0.0",
     "react": "^19.0.0",
     "tsup": "^8.3.5",

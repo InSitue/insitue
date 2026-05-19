@@ -140,7 +140,38 @@ export interface ErrorMsg {
   message: string;
 }
 
+export interface CaptureSubmitMsg {
+  t: "capture";
+  bundle: CaptureBundle;
+}
+
+/** Companion's resolution of a submitted bundle's source target. */
+export interface ResolvedSource {
+  /** Repo-relative POSIX path the companion resolved. */
+  file: string;
+  line: number;
+  column: number;
+  /** A few lines around `line` from the real file. */
+  snippet: string;
+  /** Whole component file path, if distinct/known. */
+  componentFile?: string;
+}
+export interface CaptureResolvedMsg {
+  t: "capture-resolved";
+  id: string;
+  resolved: ResolvedSource | null;
+  /** Human note, e.g. why resolution was selector-only. */
+  note: string;
+}
+
 /** Client→server messages. */
-export type ClientMessage = HelloMsg | PingMsg;
+export type ClientMessage = HelloMsg | PingMsg | CaptureSubmitMsg;
 /** Server→client messages. */
-export type ServerMessage = HelloOkMsg | PongMsg | ErrorMsg;
+export type ServerMessage =
+  | HelloOkMsg
+  | PongMsg
+  | ErrorMsg
+  | CaptureResolvedMsg;
+
+export * from "./dom.js";
+export * from "./react-source.js";
