@@ -1,0 +1,40 @@
+{
+  "name": "@insitu/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only InSitu SDK: Shadow-DOM overlay + secure companion client. Tree-shaken from prod.",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --clean --external react",
+    "dev": "tsup src/index.ts --format esm --dts --watch --external react",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true }
+  },
+  "dependencies": {
+    "@insitu/capture-core": "workspace:*",
+    "preact": "^10.25.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "react": "^19.0.0",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  }
+}

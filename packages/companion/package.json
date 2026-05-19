@@ -1,0 +1,31 @@
+{
+  "name": "@insitu/companion",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local companion process: loopback WS, project sandbox, agent edit gateway.",
+  "license": "MIT",
+  "bin": {
+    "insitu": "./dist/cli.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup src/cli.ts src/server.ts --format esm --dts --clean --external ws --external commander --external zod",
+    "dev": "tsup src/cli.ts src/server.ts --format esm --watch --external ws --external commander --external zod",
+    "start": "node dist/cli.js",
+    "test": "node --test \"test/*.test.mjs\"",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@insitu/capture-core": "workspace:*",
+    "commander": "^12.1.0",
+    "ws": "^8.18.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.13",
+    "tsup": "^8.3.5",
+    "typescript": "^5.6.3"
+  }
+}
