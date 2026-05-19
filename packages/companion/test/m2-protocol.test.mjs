@@ -34,6 +34,16 @@ test("authed session announces agent-status, then routes agent-turn", async () =
   const seen = await new Promise((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${PORT}`, { origin: ORIGIN });
     const msgs = [];
+    const done = () => {
+      const hasStatus = msgs.some((m) => m.t === "agent-status");
+      const hasStream = msgs.some(
+        (m) => m.t === "agent-stream" && m.event.t === "agent-error",
+      );
+      if (hasStatus && hasStream) {
+        ws.close();
+        resolve(msgs);
+      }
+    };
     ws.on("message", (d) => {
       const m = JSON.parse(String(d));
       msgs.push(m);
@@ -47,10 +57,7 @@ test("authed session announces agent-status, then routes agent-turn", async () =
           }),
         );
       }
-      if (m.t === "agent-stream" && m.event.t === "agent-error") {
-        ws.close();
-        resolve(msgs);
-      }
+      done();
     });
     ws.on("open", () =>
       ws.send(
@@ -58,7 +65,7 @@ test("authed session announces agent-status, then routes agent-turn", async () =
       ),
     );
     ws.on("error", reject);
-    setTimeout(() => reject(new Error("timeout")), 2000);
+    setTimeout(() => reject(new Error("timeout")), 12000);
   });
   assert.ok(seen.some((m) => m.t === "agent-status"));
   const err = seen.find((m) => m.t === "agent-stream")?.event;

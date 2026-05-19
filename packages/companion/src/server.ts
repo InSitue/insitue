@@ -33,6 +33,8 @@ export interface CompanionOptions {
   port: number;
   /** Agent transport (default cli-headless). */
   transport?: AgentTransport;
+  /** Allow ANTHROPIC_API_KEY to reach the agent (bills API, not Max). */
+  allowApiKey?: boolean;
   /** Allowed browser Origins (the running dev app). */
   origins: string[];
   /** Absolute project root the companion is scoped to. */
@@ -175,9 +177,10 @@ export function startCompanion(opts: CompanionOptions): Server {
           orchestrator = new AgentOrchestrator({
             root: opts.root,
             transport: opts.transport ?? "cli-headless",
+            allowApiKey: opts.allowApiKey ?? false,
             send: (m) => send(ws, m),
           });
-          orchestrator.announce();
+          void orchestrator.announce();
           return;
         }
         if (!authed) {

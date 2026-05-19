@@ -12,35 +12,57 @@ import type {
   AgentUndoMsg,
   ServerMessage,
 } from "@insitu/capture-core";
+import { ClaudeCodeProvider } from "./claude-code/provider.js";
+import type { AgentProvider } from "./provider.js";
 
 export interface OrchestratorDeps {
   root: string;
   transport: "cli-headless" | "mcp" | "sdk";
+  allowApiKey: boolean;
   send: (msg: ServerMessage) => void;
 }
 
 export class AgentOrchestrator {
-  constructor(private readonly deps: OrchestratorDeps) {}
+  private readonly provider: AgentProvider;
+  constructor(private readonly deps: OrchestratorDeps) {
+    this.provider = new ClaudeCodeProvider({
+      transport: deps.transport,
+      allowApiKey: deps.allowApiKey,
+      root: deps.root,
+    });
+  }
 
-  /** Sent once after the WS session authenticates. */
-  announce(): void {
+  /** Sent once after the WS session authenticates: runs the provider
+   *  preflight and reports real readiness/auth state to the overlay. */
+  async announce(): Promise<void> {
+    let pf;
+    try {
+      pf = await this.provider.preflight();
+    } catch (e) {
+      pf = {
+        ready: false,
+        warnings: [],
+        blockers: [`preflight failed: ${(e as Error).message}`],
+      };
+    }
     this.deps.send({
       t: "agent-status",
-      ready: false,
+      ready: pf.ready,
       transport: this.deps.transport,
-      warnings: [],
-      blockers: ["agent loop not implemented yet (M2-P0 scaffold)"],
+      warnings: pf.warnings,
+      blockers: pf.blockers,
     });
   }
 
   handleTurn(msg: AgentTurnMsg): void {
+    // P2 wires provider.startSession()/sendTurn(); P1 = preflight only.
     this.deps.send({
       t: "agent-stream",
       event: {
         t: "agent-error",
         turnId: msg.turnId,
         code: "internal",
-        message: "agent not wired yet (M2-P0)",
+        message: "turn handling arrives in M2-P2",
       },
     });
   }

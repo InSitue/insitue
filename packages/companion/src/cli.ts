@@ -4,7 +4,9 @@
  */
 import { resolve } from "node:path";
 import { Command } from "commander";
-import { startCompanion, COMPANION_VERSION } from "./server.js";
+import { startCompanion, COMPANION_VERSION, type AgentTransport } from "./server.js";
+
+const TRANSPORTS: AgentTransport[] = ["cli-headless", "mcp", "sdk"];
 
 const program = new Command();
 
@@ -19,17 +21,47 @@ program
     ["http://localhost:3000", "http://127.0.0.1:3000"],
   )
   .option("-r, --root <path>", "project root to scope to", process.cwd())
-  .action((opts: { port: string; origin: string[]; root: string }) => {
-    const port = Number(opts.port);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      console.error(`[insitu] invalid port: ${opts.port}`);
-      process.exit(1);
-    }
-    const root = resolve(opts.root);
-    let server;
-    try {
-      server = startCompanion({ port, origins: opts.origin, root });
-    } catch (err) {
+  .option(
+    "-t, --agent-transport <transport>",
+    "cli-headless | mcp | sdk",
+    "cli-headless",
+  )
+  .option(
+    "--allow-api-key",
+    "let ANTHROPIC_API_KEY reach the agent (bills the API, not your Max plan)",
+    false,
+  )
+  .action(
+    (opts: {
+      port: string;
+      origin: string[];
+      root: string;
+      agentTransport: string;
+      allowApiKey: boolean;
+    }) => {
+      const port = Number(opts.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        console.error(`[insitu] invalid port: ${opts.port}`);
+        process.exit(1);
+      }
+      if (!TRANSPORTS.includes(opts.agentTransport as AgentTransport)) {
+        console.error(
+          `[insitu] invalid --agent-transport: ${opts.agentTransport} (cli-headless | mcp | sdk)`,
+        );
+        process.exit(1);
+      }
+      const transport = opts.agentTransport as AgentTransport;
+      const root = resolve(opts.root);
+      let server;
+      try {
+        server = startCompanion({
+          port,
+          origins: opts.origin,
+          root,
+          transport,
+          allowApiKey: opts.allowApiKey,
+        });
+      } catch (err) {
       console.error((err as Error).message);
       process.exit(1);
     }
