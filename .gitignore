@@ -7,6 +7,31 @@ dist/
 .insitu/
 *.log
 
+# Rust build artifacts (the SWC plugin's target/ is 480+ MB; we
+# avoided it bloating prod deploys with .vercelignore — belt-and-
+# braces it at the git level too).
+target/
+
+# Local-only build outputs (npm pack writes these for smoke tests;
+# real publishes happen via CI). The compiled WASM lands next to
+# its package.json after `cargo build-wasi`; we don't commit it.
+*.tgz
+packages/swc-source-attr/insitue_swc_source_attr.wasm
+
+# Test / capture artifacts.
+.playwright-mcp/
+coverage/
+*.lcov
+
+# Claude Code tooling (local per-user symlinks + lockfiles + state).
+.agents/
+.claude/worktrees/
+.claude/skills/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+/skills/
+skills-lock.json
+
 # secrets — never commit real credentials
 .env
 .env.*
