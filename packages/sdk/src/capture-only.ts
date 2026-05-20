@@ -18,9 +18,56 @@ import { beginPick } from "./picker.js";
 import { buildBundle } from "./capture.js";
 
 export interface CaptureOnlyOptions {
-  /** Where the draft goes. Default: console + a JSON download +
-   *  `window.__insitu_capture__` (handy for prod validation). */
+  /**
+   * Publishable project key (e.g. `pk_…`). When set, captures POST
+   * to the InSitue cloud automatically — no `onCapture` plumbing
+   * required. The key is publishable (Origin-pinned + quota-gated
+   * server-side) so it's safe to ship in your production bundle.
+   */
+  projectKey?: string;
+  /**
+   * Ingest endpoint. Defaults to the InSitue cloud. Override only if
+   * you self-host the ingest service or proxy it from your own
+   * origin.
+   */
+  endpoint?: string;
+  /**
+   * Take over delivery yourself. Wins over `projectKey` if both are
+   * set. Default (neither set): console + JSON download +
+   * `window.__insitu_capture__` (useful for prod validation).
+   */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
+}
+
+const DEFAULT_INGEST = "https://www.insitue.com/api/v1/capture";
+
+/** POSTs the bundle to the InSitue ingest endpoint. Best-effort —
+ *  network errors are swallowed so the panel still closes cleanly;
+ *  the bundle is in `window.__insitu_capture__` as a fallback hook,
+ *  and the cloud dedupes retries server-side. */
+async function postCapture(
+  endpoint: string,
+  projectKey: string,
+  draft: IssueDraft,
+): Promise<void> {
+  try {
+    await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-insitue-key": projectKey,
+      },
+      body: JSON.stringify({
+        bundle: draft.bundle,
+        note: draft.bundle.userNote ?? null,
+        projectKey, // belt + braces — header is the contract, body is the fallback
+      }),
+      credentials: "omit",
+      keepalive: true,
+    });
+  } catch {
+    /* swallow network errors */
+  }
 }
 
 // Self-contained palette (Shadow DOM — no host CSS). Mirrors the
@@ -65,14 +112,36 @@ function defaultDeliver(draft: IssueDraft): void {
 
 type Phase = "idle" | "picking" | "compose" | "sending" | "sent";
 
-function CaptureOnlyApp(props: { onCapture?: CaptureOnlyOptions["onCapture"] }) {
+interface AppProps {
+  projectKey?: string;
+  endpoint?: string;
+  onCapture?: CaptureOnlyOptions["onCapture"];
+}
+
+function CaptureOnlyApp(props: AppProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [bundle, setBundle] = useState<CaptureBundle | null>(null);
   const [note, setNote] = useState("");
 
-  const sink = new IssueTrackerSink((draft) => {
-    if (props.onCapture) props.onCapture(draft, draft.bundle);
-    else defaultDeliver(draft);
+  const sink = new IssueTrackerSink(async (draft) => {
+    // Always set the window hook — useful for prod validation
+    // regardless of delivery mode.
+    (globalThis as Record<string, unknown>).__insitu_capture__ = {
+      title: draft.title,
+      body: draft.body,
+      bundle: draft.bundle,
+    };
+    if (props.onCapture) {
+      props.onCapture(draft, draft.bundle);
+    } else if (props.projectKey) {
+      await postCapture(
+        props.endpoint ?? DEFAULT_INGEST,
+        props.projectKey,
+        draft,
+      );
+    } else {
+      defaultDeliver(draft);
+    }
   });
 
   useEffect(() => {
@@ -297,7 +366,11 @@ export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   const mount = document.createElement("div");
   shadow.appendChild(mount);
   render(
-    h(CaptureOnlyApp, opts.onCapture ? { onCapture: opts.onCapture } : {}),
+    h(CaptureOnlyApp, {
+      projectKey: opts.projectKey,
+      endpoint: opts.endpoint,
+      onCapture: opts.onCapture,
+    }),
     mount,
   );
   return () => {

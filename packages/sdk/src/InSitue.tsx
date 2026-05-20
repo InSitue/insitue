@@ -35,30 +35,47 @@ export function InSitue({ port }: InSitueProps): null {
 }
 
 export interface InSitueCaptureProps {
-  /** Override delivery (default: console + JSON download +
-   *  `window.__insitu_capture__`). */
+  /**
+   * Publishable project key (e.g. `pk_…`). When set, captures POST
+   * to the InSitue cloud automatically. Origin-pinned + quota-gated
+   * server-side, so safe to ship in your production bundle.
+   */
+  projectKey?: string;
+  /** Override the ingest endpoint (default = InSitue cloud). */
+  endpoint?: string;
+  /**
+   * Take over delivery yourself. Wins over `projectKey`. Default
+   * (neither set): console + JSON download + `window.__insitu_capture__`.
+   */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
 }
 
 /**
- * `<InSitueCapture />` — the prod capture-only path (M4, validated not
- * shipped). UNLIKE `<InSitue />` it does NOT bail in a production build:
- * capture-only is exactly what prod runs (no companion to refuse). It
- * never touches fs/agent/WS; the same bundle just flows to a sink.
+ * `<InSitueCapture />` — the prod capture-only path. UNLIKE
+ * `<InSitue />` it does NOT bail in a production build: capture-only
+ * is exactly what prod runs (no companion to refuse). It never touches
+ * fs/agent/WS; the same bundle just flows to the configured sink.
+ *
+ * The simplest path: set `projectKey` and the SDK POSTs captures to
+ * the InSitue cloud automatically.
  */
-export function InSitueCapture({ onCapture }: InSitueCaptureProps): null {
+export function InSitueCapture({
+  projectKey,
+  endpoint,
+  onCapture,
+}: InSitueCaptureProps): null {
   useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;
     void import("./capture-only.js").then((m) => {
       if (active) {
-        dispose = m.mountCaptureOnly(onCapture ? { onCapture } : {});
+        dispose = m.mountCaptureOnly({ projectKey, endpoint, onCapture });
       }
     });
     return () => {
       active = false;
       dispose?.();
     };
-  }, [onCapture]);
+  }, [projectKey, endpoint, onCapture]);
   return null;
 }

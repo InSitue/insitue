@@ -1,10 +1,9 @@
 {
   "name": "@insitue/sdk",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Dev-only InSitue SDK: Shadow-DOM overlay + secure companion client. Tree-shaken from prod.",
+  "version": "0.1.0",
+  "description": "InSitue capture SDK — drop one snippet into your deployed app; your users point at a bug, InSitue opens a verified pull request.",
   "license": "MIT",
+  "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -26,29 +25,62 @@
       "import": "./dist/babel.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
     "react": ">=18"
   },
   "peerDependenciesMeta": {
-    "react": { "optional": true }
+    "react": {
+      "optional": true
+    }
   },
   "dependencies": {
-    "@insitue/capture-core": "workspace:*",
     "html-to-image": "^1.11.13",
     "preact": "^10.25.1"
   },
   "devDependencies": {
+    "@insitue/capture-core": "workspace:*",
     "@types/node": "^22.9.0",
     "@types/react": "^19.0.0",
     "react": "^19.0.0",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/InSitue/insitue.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://www.insitue.com",
+  "bugs": {
+    "url": "https://github.com/InSitue/insitue/issues"
+  },
+  "keywords": [
+    "insitue",
+    "bug-report",
+    "in-app",
+    "pull-request",
+    "autopilot",
+    "react",
+    "nextjs",
+    "ai",
+    "agent"
+  ],
+  "author": "InSitue (https://www.insitue.com)",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }
