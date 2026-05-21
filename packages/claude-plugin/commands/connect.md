@@ -22,6 +22,20 @@ not need to ask the user to run any extra commands.
    "Connected. Pick something in the browser when you're ready."
 2. Enter the loop: call `mcp__insitue__next_pick`. It long-polls
    (~5 min default). When it returns with `status: "ok"`:
+   - **Always echo the prompt back first.** Before any action,
+     diff, or follow-up question, lead with:
+
+     > **You asked:** [verbatim `pick.userNote`]
+     > (Source: `pick.source.file:pick.source.line` ·
+     > `pick.confidence`)
+
+     The CLI transcript only shows your output, not the prompt
+     the user typed in the browser panel. Without the echo, the
+     user has to mentally pair every response with what they
+     asked — confusing during multi-pick sessions and impossible
+     when reviewing the log later. Echo verbatim; don't
+     paraphrase. If `userNote` is empty, ask what to change at
+     the picked component instead (see below).
    - **`pick.userNote`** is the user's instruction. Treat it as
      the prompt.
    - **`pick.source.file:line`** is where to act. Read the file
