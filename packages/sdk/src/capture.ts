@@ -3,7 +3,7 @@
  * capture-core resolvers + an html-to-image screenshot crop + the
  * runtime ring buffers. This is the SDK's `CaptureCore.buildBundle`.
  */
-import { toPng } from "html-to-image";
+import { toCanvas } from "html-to-image";
 import {
   CAPTURE_SCHEMA_VERSION,
   breakpointFor,
@@ -66,6 +66,104 @@ function crossOriginMediaReason(root: Element): string | null {
   return null;
 }
 
+/** Walk up from the picked element to find a meaningfully-sized
+ *  ancestor to screenshot — so the thumbnail has enough visual
+ *  context for a human reviewer to recognise the bug. Heuristic:
+ *  the first ancestor at least 420×140 pixels, but stop short of
+ *  anything larger than ~1.2× the viewport (otherwise we'd
+ *  screenshot the whole page). Bounded by depth so we never run
+ *  away. */
+function findContextAncestor(el: HTMLElement): HTMLElement {
+  const minW = 420;
+  const minH = 140;
+  const maxW = window.innerWidth * 1.2;
+  const maxH = window.innerHeight * 1.2;
+  let cur: HTMLElement = el;
+  for (let depth = 0; depth < 8; depth++) {
+    const r = cur.getBoundingClientRect();
+    // Big enough already — stop here.
+    if (r.width >= minW && r.height >= minH) return cur;
+    // About to overshoot — stop one level back. (`cur` itself is
+    // returned so the screenshot is still as large as we can get
+    // without blowing the viewport.)
+    const parent = cur.parentElement;
+    if (!parent) return cur;
+    const pr = parent.getBoundingClientRect();
+    if (pr.width > maxW || pr.height > maxH) return cur;
+    cur = parent;
+  }
+  return cur;
+}
+
+/** Rasterise the FULL document and crop to `cropRect` (viewport
+ *  coords, CSS pixels). Rendering the whole document — not just
+ *  the targeted subtree — is the only honest way to capture
+ *  html/body backgrounds, parent backdrop decorations, fixed/
+ *  sticky chrome, and sibling overlays that compose what the
+ *  user actually sees. Falls back gracefully on cross-origin
+ *  media by filtering it out (a blank rect inside the picked
+ *  region is better than refusing the whole capture). */
+async function renderViewportCrop(
+  cropRect: DOMRect,
+  pixelRatio: number,
+): Promise<string | null> {
+  const bodyBg = getComputedStyle(document.body).backgroundColor;
+  const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
+  // Pick whichever root has a non-transparent paint; html-to-image
+  // composites against this, so it has to match the visual.
+  const backgroundColor =
+    bodyBg && bodyBg !== "rgba(0, 0, 0, 0)" && bodyBg !== "transparent"
+      ? bodyBg
+      : htmlBg && htmlBg !== "rgba(0, 0, 0, 0)" && htmlBg !== "transparent"
+        ? htmlBg
+        : "#ffffff";
+
+  const fullCanvas = await toCanvas(document.documentElement, {
+    pixelRatio,
+    cacheBust: true,
+    backgroundColor,
+    filter: (n) => {
+      if (
+        n instanceof Element &&
+        n.closest?.("#insitu-root, [data-insitu-layer]")
+      ) {
+        return false;
+      }
+      // Drop cross-origin images that would taint the canvas. We'd
+      // rather render a hole than fail the whole capture — the
+      // surrounding context still helps the reviewer.
+      if (n instanceof HTMLImageElement) {
+        if (crossOrigin(n.currentSrc || n.src) && n.crossOrigin == null) {
+          return false;
+        }
+      }
+      return true;
+    },
+  });
+
+  // cropRect is viewport-relative; the full-document render is
+  // document-relative — shift by scroll offset to line them up.
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
+  out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
+  const ctx = out.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(
+    fullCanvas,
+    Math.round((cropRect.x + sx) * pixelRatio),
+    Math.round((cropRect.y + sy) * pixelRatio),
+    Math.round(cropRect.width * pixelRatio),
+    Math.round(cropRect.height * pixelRatio),
+    0,
+    0,
+    out.width,
+    out.height,
+  );
+  return out.toDataURL("image/png");
+}
+
 function elementFor(sel: SelectionInput): Element | null {
   if (sel.mode === "element") return sel.pointerPath?.[0] ?? null;
   if (sel.rect) {
@@ -86,35 +184,64 @@ export async function buildBundle(
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
   if (el instanceof HTMLElement) {
-    const taint = crossOriginMediaReason(el);
-    if (taint) {
-      // Don't even attempt — toPng would silently return a blank PNG.
-      screenshotUnavailable = `${taint} — can't rasterise in-browser`;
-    } else {
-      try {
-        const r = el.getBoundingClientRect();
-        const dataUrl = await toPng(el, {
-          pixelRatio: Math.min(dpr, 2),
-          cacheBust: true,
-          // Don't try to screenshot our own overlay if it overlaps.
-          filter: (n) =>
-            !(n instanceof Element &&
-              n.closest?.("#insitu-root, [data-insitu-layer]")),
-        });
-        // A degenerate result (toPng didn't throw but produced nothing
-        // usable) is just as dishonest as a blank box.
-        if (!dataUrl || dataUrl.length < 256) {
-          screenshotUnavailable = "rasterise produced an empty image";
-        } else {
-          screenshot = {
-            mime: "image/png",
-            dataUrl,
-            bounds: { x: r.x, y: r.y, width: r.width, height: r.height },
-          };
-        }
-      } catch {
-        screenshotUnavailable = "rasterise failed";
+    // Walk up to a usefully-sized ancestor so the screenshot has
+    // enough visual context for a reviewer to recognise the bug
+    // (single letters or tiny icons in isolation are useless).
+    const context = findContextAncestor(el);
+    // Clamp to the visible viewport — a context that extends off-
+    // screen would otherwise produce a crop that's mostly blank.
+    const cr = context.getBoundingClientRect();
+    const cropRect = new DOMRect(
+      Math.max(0, cr.x),
+      Math.max(0, cr.y),
+      Math.min(window.innerWidth, cr.right) - Math.max(0, cr.x),
+      Math.min(window.innerHeight, cr.bottom) - Math.max(0, cr.y),
+    );
+    // Highlight the picked element so the reviewer can see exactly
+    // what was selected within the surrounding context. Inline
+    // outline wins against most stylesheets without !important.
+    const orig = {
+      outline: el.style.outline,
+      outlineOffset: el.style.outlineOffset,
+    };
+    el.style.outline = "3px solid #ff6b00";
+    el.style.outlineOffset = "2px";
+    try {
+      const dataUrl = await renderViewportCrop(
+        cropRect,
+        // Cap pixel ratio for full-document rasterise — 2× of a
+        // long page is enough to blow per-tab canvas memory caps
+        // on some browsers (and 1.5× still looks crisp).
+        Math.min(dpr, 1.5),
+      );
+      if (!dataUrl || dataUrl.length < 1024) {
+        // Either the page has cross-origin media we had to filter
+        // out and the crop region was nothing but that, or the
+        // browser refused the size. Flag honestly.
+        const taint = crossOriginMediaReason(el);
+        screenshotUnavailable = taint
+          ? `${taint} — can't rasterise in-browser`
+          : "rasterise produced an empty image";
+      } else {
+        screenshot = {
+          mime: "image/png",
+          dataUrl,
+          // Bounds describe the SCREENSHOT (the crop region) so
+          // the dashboard knows what slice of viewport this is.
+          bounds: {
+            x: cropRect.x,
+            y: cropRect.y,
+            width: cropRect.width,
+            height: cropRect.height,
+          },
+        };
       }
+    } catch {
+      screenshotUnavailable = "rasterise failed";
+    } finally {
+      // Restore — even if rasterise threw.
+      el.style.outline = orig.outline;
+      el.style.outlineOffset = orig.outlineOffset;
     }
   }
 
