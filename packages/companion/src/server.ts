@@ -85,6 +85,12 @@ const clientMessage = z.discriminatedUnion("t", [
     t: z.literal("agent-commit-session"),
     message: z.string().optional(),
   }),
+  // #147 M1: terminal-pipe subscribers (`insitue connect`).
+  // Subscribers are read-only listeners on the same loopback +
+  // token-auth path browsers use; they receive a broadcast event
+  // every time a browser pick lands so the dev's CLI / claude /
+  // aider can consume the selection.
+  z.object({ t: z.literal("subscribe") }),
 ]);
 
 function send(ws: WebSocket, msg: ServerMessage): void {
@@ -134,8 +140,25 @@ export function startCompanion(opts: CompanionOptions): Server {
 
   const wss = new WebSocketServer({ noServer: true });
 
+  // #147 M1: terminal-pipe subscribers (`insitue connect`). Set of
+  // authed WS connections that want a copy of every capture event
+  // (the dev's CLI prints/forwards them). Loopback + token is the
+  // auth boundary; the URL path is just the "I'm a CLI, skip the
+  // browser Origin check that doesn't apply to me" signal.
+  const subscribers = new Set<WebSocket>();
+  const CLI_PATH = "/insitu/cli";
+
   http.on("upgrade", (req, socket, head) => {
-    if (!isLoopback(req) || !originOk(req)) {
+    if (!isLoopback(req)) {
+      socket.destroy();
+      return;
+    }
+    const isCli = req.url === CLI_PATH;
+    // Browser connections must pass the Origin allowlist
+    // (anti-DNS-rebinding). CLI connections are loopback + token-
+    // gated below (no browser Origin to check; the dev opted into
+    // the connection from their own terminal).
+    if (!isCli && !originOk(req)) {
       socket.destroy();
       return;
     }
@@ -214,6 +237,31 @@ export function startCompanion(opts: CompanionOptions): Server {
             resolved,
             note,
           });
+          // Fan out to terminal-pipe subscribers (`insitue connect`).
+          // We send the bundle alongside so the CLI has everything it
+          // needs to format pretty / NDJSON output without a round-trip.
+          const broadcast = {
+            t: "broadcast-capture" as const,
+            id: bundle.id,
+            bundle,
+            resolved,
+            note,
+            at: new Date().toISOString(),
+          };
+          for (const sub of subscribers) {
+            if (sub.readyState === sub.OPEN) {
+              sub.send(JSON.stringify(broadcast));
+            }
+          }
+          return;
+        }
+        if (msg.t === "subscribe") {
+          subscribers.add(ws);
+          send(ws, {
+            t: "subscribe-ok",
+            companionVersion: COMPANION_VERSION,
+            projectRoot: opts.root,
+          } as unknown as ServerMessage);
           return;
         }
         // zod `.optional()` widens to `T | undefined`; the pure
@@ -238,6 +286,10 @@ export function startCompanion(opts: CompanionOptions): Server {
           );
         }
       });
+      // Subscribers stay in the set until they disconnect — without
+      // this, broadcasts would pile up writes to dead sockets and
+      // throw inside the loop above.
+      ws.on("close", () => subscribers.delete(ws));
     });
   });
 

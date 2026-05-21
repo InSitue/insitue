@@ -10,8 +10,8 @@
   },
   "files": ["dist"],
   "scripts": {
-    "build": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
-    "dev": "tsup src/cli.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --watch --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
+    "build": "tsup src/cli.ts src/cli-connect.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
+    "dev": "tsup src/cli.ts src/cli-connect.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --watch --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
     "start": "node dist/cli.js",
     "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
