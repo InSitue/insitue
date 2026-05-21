@@ -85,6 +85,70 @@ export function svgGroupPick(): Fixture {
   };
 }
 
+/** Reproduces the minimecha HubHero pattern that bit dogfood
+ *  on SDK 0.1.4 → 0.1.7: a `next/image` `<img>` with `fill`
+ *  styling (`position:absolute; width:100%; height:100%;
+ *  object-fit:cover`) inside an `aspect-ratio` parent, with
+ *  text overlaid on top. The user picks the image; the
+ *  screenshot must include the image's actual pixels (not just
+ *  the parent's background bleeding through). */
+export function nextImageHeroPick(): Fixture {
+  // A small data-URL image with HIGH color variance — useful
+  // for the pixel-sampling assertion later. Each row of the 8×8
+  // PNG is a different colour, so any region of the rendered
+  // image has multi-colour pixels.
+  const VIVID_IMG_DATA_URL =
+    "data:image/svg+xml;base64," +
+    btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="200" viewBox="0 0 320 200">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+        '<stop offset="0" stop-color="#ff3366"/>' +
+        '<stop offset=".5" stop-color="#33ff99"/>' +
+        '<stop offset="1" stop-color="#3399ff"/>' +
+        "</linearGradient></defs>" +
+        '<rect width="320" height="200" fill="url(#g)"/>' +
+        '<circle cx="160" cy="100" r="40" fill="#ffd44d"/>' +
+        '<rect x="40" y="40" width="60" height="60" fill="#000"/>' +
+        "</svg>",
+    );
+  // Mimics next/image with `fill` + `sizes` + `srcset` — what
+  // Next's image optimiser actually emits in production. All
+  // srcset variants point at the same data URL so the browser
+  // loads the image successfully (real Next would serve from
+  // `/_next/image` for each width; here we collapse to a single
+  // data URL because the fixture has no server). The key bits
+  // for the regression are present: `position:absolute` inside
+  // an `aspect-ratio` parent, `srcset` siblings, `object-fit:
+  // cover`, `loading="lazy"`, `data-nimg="fill"`, text overlay
+  // on top.
+  const root = mount(`
+    <div style="width:640px;height:360px;background:#0d0d0d;position:relative">
+      <div style="position:relative; aspect-ratio: 16/9; width:100%; overflow:hidden">
+        <img
+          id="t-next-image"
+          alt="hero"
+          data-nimg="fill"
+          loading="lazy"
+          decoding="async"
+          src="${VIVID_IMG_DATA_URL}"
+          srcset="${VIVID_IMG_DATA_URL} 640w, ${VIVID_IMG_DATA_URL} 1280w, ${VIVID_IMG_DATA_URL} 1920w"
+          sizes="100vw"
+          style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover; object-position:center; color:transparent;"
+        />
+        <div style="position:absolute; inset:0; padding:32px; color:#fff; font:700 32px/1 sans-serif; pointer-events:none">
+          Hero text overlay
+        </div>
+      </div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLImageElement>("#t-next-image")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
 /** Picks a `<div>` that's the parent of nothing visible — the
  *  bundle should still ship with a `screenshot` or honest
  *  `screenshotUnavailable`, never both undefined. */

@@ -135,33 +135,69 @@ async function renderViewportCrop(
         ? htmlBg
         : "#ffffff";
 
-  // Trust html-to-image's built-in `embedImages` to handle CORS-
-  // friendly imgs natively (it fetches + inlines as data URLs).
-  // For imgs that fail to render anyway (next/image-style layout
-  // breaks under foreignObject; placeholder fallbacks; etc.) we
-  // catch them with `detectUnrenderedImages` post-render and route
-  // through the layer-2 escalation. Never touches the live DOM, so
-  // no visible page-image flash.
   const failedImages = new Set<HTMLImageElement>();
-  const fullCanvas = await toCanvas(document.documentElement, {
-    pixelRatio,
-    cacheBust: true,
-    backgroundColor,
-    imagePlaceholder: IMAGE_PLACEHOLDER,
-    filter: (n) =>
-      !(
-        n instanceof Element &&
-        n.closest?.("#insitu-root, [data-insitu-layer]")
-      ),
-  });
-
-  const sx = window.scrollX;
-  const sy = window.scrollY;
   const out = document.createElement("canvas");
   out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
   out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
   const ctx = out.getContext("2d");
   if (!ctx) return { dataUrl: null, failedImages };
+
+  // 1. Manual <img> compositing FIRST.
+  //
+  // html-to-image's foreignObject pipeline reliably drops
+  // absolutely-positioned `<img>` elements with `srcset` (the
+  // `next/image` `fill` pattern) — the cloned img keeps its
+  // srcset, the browser tries to use unreachable variants, the
+  // canvas paints empty. Detection-only / post-render
+  // verification can spot it but doesn't recover the pixels.
+  //
+  // The fix is structural: draw the live `<img>` directly to the
+  // crop canvas using `ctx.drawImage(liveImg, …)` with proper
+  // object-fit/object-position math. We then filter those imgs
+  // out of the html-to-image render so it composites text/UI on
+  // top of our image layer cleanly. This bypasses every srcset/
+  // foreignObject quirk because we never ask html-to-image to
+  // touch the imgs that hit those quirks.
+  //
+  // Limitation: we only do this for absolute/fixed-positioned
+  // imgs (the next/image-fill pattern). Inline imgs still go
+  // through html-to-image's normal path — they contribute to
+  // layout and html-to-image handles them fine for CORS-friendly
+  // sources. Cross-origin imgs without a CORS attribute would
+  // taint our canvas if we drew them directly, so we skip those
+  // and let layer-2 catch them.
+  const drawnImgs = drawAbsoluteImagesOnto(
+    ctx,
+    cropRect,
+    pixelRatio,
+    failedImages,
+  );
+
+  // 2. html-to-image render with the manually-drawn imgs filtered
+  //    out. Their pixels are already on `ctx`; the UI layer on top
+  //    is transparent where they were, so the composite preserves
+  //    them.
+  const fullCanvas = await toCanvas(document.documentElement, {
+    pixelRatio,
+    cacheBust: true,
+    backgroundColor,
+    imagePlaceholder: IMAGE_PLACEHOLDER,
+    filter: (n) => {
+      if (n instanceof Element && n.closest?.("#insitu-root, [data-insitu-layer]")) {
+        return false;
+      }
+      if (n instanceof HTMLImageElement && drawnImgs.has(n)) {
+        return false;
+      }
+      return true;
+    },
+  });
+
+  // 3. Composite the UI layer on top of our image layer. Default
+  //    `source-over` means transparent UI pixels (where filtered
+  //    imgs were) leave the underlying image pixels intact.
+  const sx = window.scrollX;
+  const sy = window.scrollY;
   ctx.drawImage(
     fullCanvas,
     Math.round((cropRect.x + sx) * pixelRatio),
@@ -176,12 +212,144 @@ async function renderViewportCrop(
   if (looksBlankUniform(ctx, out.width, out.height)) {
     return { dataUrl: null, failedImages };
   }
-  // Verify each <img> actually rendered. Pixel-sample where the
-  // img's bbox should be; if uniformly filled, html-to-image
-  // dropped it (next/image layout break, etc.) — flag for the
-  // layer-2 escalation.
+  // Post-render verification — flags any imgs we DIDN'T handle
+  // manually (inline imgs that html-to-image silently dropped).
+  // Triggers layer-2 escalation for those cases.
   detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
   return { dataUrl: out.toDataURL("image/png"), failedImages };
+}
+
+/** Walk every absolutely-positioned `<img>` whose bbox overlaps
+ *  the crop region, and draw it directly to `ctx` using
+ *  `ctx.drawImage(liveImg, …)` with `object-fit` / `object-position`
+ *  math. Returns the set of imgs we successfully drew — the caller
+ *  filters those out of the html-to-image render so we don't
+ *  double-paint. */
+function drawAbsoluteImagesOnto(
+  ctx: CanvasRenderingContext2D,
+  cropRect: DOMRect,
+  pixelRatio: number,
+  failedImages: Set<HTMLImageElement>,
+): Set<HTMLImageElement> {
+  const drawn = new Set<HTMLImageElement>();
+  const imgs = Array.from(
+    document.querySelectorAll<HTMLImageElement>("img"),
+  ).filter(
+    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
+  );
+  for (const img of imgs) {
+    const r = img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) continue;
+    const cs = getComputedStyle(img);
+    if (cs.position !== "absolute" && cs.position !== "fixed") continue;
+    // Skip imgs that don't overlap the crop.
+    if (
+      r.right < cropRect.x ||
+      r.left > cropRect.x + cropRect.width ||
+      r.bottom < cropRect.y ||
+      r.top > cropRect.y + cropRect.height
+    ) {
+      continue;
+    }
+    // CORS safety — drawing a cross-origin img without a
+    // `crossOrigin` attribute taints the canvas, after which
+    // `toDataURL()` throws. Skip those; layer-2 captures them via
+    // `getDisplayMedia` instead.
+    const src = img.currentSrc || img.src;
+    if (!src) continue;
+    if (
+      crossOrigin(src) &&
+      img.crossOrigin !== "anonymous" &&
+      img.crossOrigin !== "use-credentials"
+    ) {
+      failedImages.add(img);
+      continue;
+    }
+    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
+      // Browser couldn't load it — broken-image state. Layer-2
+      // can't help either, but flagging is the honest thing.
+      failedImages.add(img);
+      continue;
+    }
+    const dest = {
+      x: (r.left - cropRect.x) * pixelRatio,
+      y: (r.top - cropRect.y) * pixelRatio,
+      w: r.width * pixelRatio,
+      h: r.height * pixelRatio,
+    };
+    const source = computeObjectFitSource(img, cs);
+    try {
+      ctx.drawImage(
+        img,
+        source.sx,
+        source.sy,
+        source.sw,
+        source.sh,
+        dest.x,
+        dest.y,
+        dest.w,
+        dest.h,
+      );
+      drawn.add(img);
+    } catch {
+      // drawImage can throw on incomplete or cross-origin imgs
+      // even after our checks (rare race). Flag + skip.
+      failedImages.add(img);
+    }
+  }
+  return drawn;
+}
+
+/** Translate the picked img's `object-fit` + `object-position` into
+ *  a source rectangle for `ctx.drawImage`. Covers the common cases
+ *  (fill / cover / contain / none); `scale-down` falls back to
+ *  contain semantics. Object-position is centred-only for now —
+ *  most next/image usage is the default `center`. */
+function computeObjectFitSource(
+  img: HTMLImageElement,
+  cs: CSSStyleDeclaration,
+): { sx: number; sy: number; sw: number; sh: number } {
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  const r = img.getBoundingClientRect();
+  const dw = r.width;
+  const dh = r.height;
+  if (!nw || !nh || !dw || !dh) {
+    return { sx: 0, sy: 0, sw: nw || 1, sh: nh || 1 };
+  }
+  const fit = cs.objectFit || "fill";
+  if (fit === "fill") {
+    return { sx: 0, sy: 0, sw: nw, sh: nh };
+  }
+  const destAR = dw / dh;
+  const srcAR = nw / nh;
+  if (fit === "cover") {
+    if (srcAR > destAR) {
+      // Source is wider — crop sides.
+      const sw = nh * destAR;
+      return { sx: (nw - sw) / 2, sy: 0, sw, sh: nh };
+    }
+    const sh = nw / destAR;
+    return { sx: 0, sy: (nh - sh) / 2, sw: nw, sh };
+  }
+  if (fit === "contain" || fit === "scale-down") {
+    // No source crop — drawImage stretches the whole source to dest.
+    // (For perfect letterboxing we'd need to inset dest; skipped
+    // for now — letterbox edges sit on background colour, fine.)
+    return { sx: 0, sy: 0, sw: nw, sh: nh };
+  }
+  // `none` — 1:1 from centre.
+  if (fit === "none") {
+    const sw = Math.min(nw, dw);
+    const sh = Math.min(nh, dh);
+    return {
+      sx: (nw - sw) / 2,
+      sy: (nh - sh) / 2,
+      sw,
+      sh,
+    };
+  }
+  return { sx: 0, sy: 0, sw: nw, sh: nh };
 }
 
 /** Post-render image verification — for each `<img>` whose bbox
