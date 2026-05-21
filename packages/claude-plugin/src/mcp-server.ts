@@ -291,7 +291,7 @@ server.registerTool(
         ),
     },
   },
-  async ({ timeout_ms }: { timeout_ms?: number }) => {
+  async ({ timeout_ms }) => {
     const ms = timeout_ms ?? NEXT_PICK_DEFAULT_TIMEOUT_MS;
     const pick = await buffer.next(ms);
     if (!pick) {
@@ -332,7 +332,7 @@ server.registerTool(
         .describe(`Max picks to return (1..${MAX_BUFFERED_PICKS}). Default 10.`),
     },
   },
-  async ({ limit }: { limit?: number }) => {
+  async ({ limit }) => {
     const picks = buffer.recent(limit ?? 10);
     return {
       content: [
