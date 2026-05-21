@@ -868,15 +868,45 @@ export async function buildBundle(
   // SVGElement gets the same path — the silent-skip on SVG picks
   // (e.g. an icon's <g>) was the "I see nothing" bug 2026-05-21.
   if (el instanceof HTMLElement || el instanceof SVGElement) {
-    // 1. Compute crop region around a context-sized ancestor.
+    // 1. Compute crop region — context-sized, but CENTERED on the
+    //    picked element. The previous implementation used the
+    //    context-ancestor's own bounding rect as the crop, which
+    //    drifted: if the ancestor was much larger than the picked
+    //    element (an article wrapper containing a sub-paragraph div),
+    //    the picked element ended up off-screen in the crop while
+    //    the screenshot showed neighbouring content (a hero image,
+    //    say). Reviewers couldn't tell what was actually clicked.
+    //
+    //    The fix: only the ancestor's SIZE informs the crop —
+    //    "enough surrounding pixels to recognise the area" — and we
+    //    always center on the picked element. The outline already
+    //    applied at line ~887 then highlights the exact selection
+    //    inside the rendered thumbnail.
+    const pickedRect = el.getBoundingClientRect();
     const context = findContextAncestor(el);
-    const cr = context.getBoundingClientRect();
-    const cropRect = new DOMRect(
-      Math.max(0, cr.x),
-      Math.max(0, cr.y),
-      Math.min(window.innerWidth, cr.right) - Math.max(0, cr.x),
-      Math.min(window.innerHeight, cr.bottom) - Math.max(0, cr.y),
+    const ar = context.getBoundingClientRect();
+
+    const MIN_W = 420;
+    const MIN_H = 140;
+    const cropW = Math.min(
+      window.innerWidth,
+      Math.max(MIN_W, ar.width, pickedRect.width),
     );
+    const cropH = Math.min(
+      window.innerHeight,
+      Math.max(MIN_H, ar.height, pickedRect.height),
+    );
+    const pickedCx = pickedRect.x + pickedRect.width / 2;
+    const pickedCy = pickedRect.y + pickedRect.height / 2;
+    const cropX = Math.max(
+      0,
+      Math.min(window.innerWidth - cropW, pickedCx - cropW / 2),
+    );
+    const cropY = Math.max(
+      0,
+      Math.min(window.innerHeight - cropH, pickedCy - cropH / 2),
+    );
+    const cropRect = new DOMRect(cropX, cropY, cropW, cropH);
 
     // 2. Highlight the picked element so the reviewer can see exactly
     // what was selected within the surrounding context.
