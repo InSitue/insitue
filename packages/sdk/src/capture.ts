@@ -125,7 +125,17 @@ function findContextAncestor(el: RasterisableElement): RasterisableElement {
 async function renderViewportCrop(
   cropRect: DOMRect,
   pixelRatio: number,
-): Promise<{ dataUrl: string | null; failedImages: Set<HTMLImageElement> }> {
+): Promise<{
+  dataUrl: string | null;
+  /** True when the rasterised canvas's 16-pixel sample grid hit a
+   *  single colour. Caller decides: when layer-2 is available, treat
+   *  this as a failed rasterise and escalate; when layer-2 is off
+   *  (dev overlay), trust it (legitimate uniform-colour crops happen,
+   *  e.g. a small element inside a solid-background section, and a
+   *  uniform thumbnail beats no thumbnail). */
+  looksBlank: boolean;
+  failedImages: Set<HTMLImageElement>;
+}> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
   const backgroundColor =
@@ -140,7 +150,7 @@ async function renderViewportCrop(
   out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
   out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
   const ctx = out.getContext("2d");
-  if (!ctx) return { dataUrl: null, failedImages };
+  if (!ctx) return { dataUrl: null, looksBlank: false, failedImages };
 
   // 1. html-to-image renders the document. For
   //    absolutely-positioned <img>s (the next/image fill pattern)
@@ -206,11 +216,9 @@ async function renderViewportCrop(
   // collected via the `failedImages` set, which `assessCaptureQuality`
   // reads after the rasterise.
 
-  if (looksBlankUniform(ctx, out.width, out.height)) {
-    return { dataUrl: null, failedImages };
-  }
+  const looksBlank = looksBlankUniform(ctx, out.width, out.height);
   detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
-  return { dataUrl: out.toDataURL("image/png"), failedImages };
+  return { dataUrl: out.toDataURL("image/png"), looksBlank, failedImages };
 }
 
 /** Walk every absolutely-positioned `<img>` whose bbox overlaps
@@ -888,16 +896,19 @@ export async function buildBundle(
       const skipLayer1 = settings.alwaysPixelPerfect;
 
       let layer1Result: string | null = null;
+      let layer1LooksBlank = false;
       let quality: QualityAssessment | null = null;
 
       if (!skipLayer1) {
         const r = await renderViewportCrop(cropRect, Math.min(dpr, 1.5));
         layer1Result = r.dataUrl;
+        layer1LooksBlank = r.looksBlank;
         quality = assessCaptureQuality(cropRect, r.failedImages);
       }
 
       const imperfect =
         !layer1Result ||
+        layer1LooksBlank ||
         (quality != null &&
           (quality.unembeddableImages > 0 ||
             quality.hasVideo ||
