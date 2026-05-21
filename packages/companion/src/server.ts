@@ -132,9 +132,13 @@ export function startCompanion(opts: CompanionOptions): Server {
     );
   }
 
-  // Per-session token. Written to .insitu/session.json (gitignored) so
-  // the dev app can read it; printed too. NOTE (M1): tighten delivery
-  // so only the dev server — not any local process — can obtain it.
+  // Per-session token. Written to .insitu/session.json so the dev
+  // app can read it; printed too. We also write a `.gitignore` next
+  // to it that ignores the whole `.insitu/` directory — so the
+  // first time the companion runs in a project, the token never
+  // leaks into git even if the user has zero existing gitignore
+  // discipline. NOTE (M1): tighten delivery so only the dev server
+  // — not any local process — can obtain it.
   const token = randomBytes(24).toString("base64url");
   const sessionDir = join(opts.root, ".insitu");
   mkdirSync(sessionDir, { recursive: true });
@@ -142,6 +146,17 @@ export function startCompanion(opts: CompanionOptions): Server {
     join(sessionDir, "session.json"),
     JSON.stringify({ token, port: opts.port, pid: process.pid }, null, 2),
   );
+  try {
+    // Defense in depth — top-level .gitignore may or may not exclude
+    // .insitu/. This local one is unambiguous.
+    writeFileSync(
+      join(sessionDir, ".gitignore"),
+      "# Auto-created by @insitue/companion. Holds your per-session\n" +
+        "# token — must never be committed.\n*\n",
+    );
+  } catch {
+    /* best-effort */
+  }
 
   // Match any http(s)://localhost:* OR http(s)://127.0.0.1:* — used
   // when `allowLocalhost` is on so users don't have to know their dev
