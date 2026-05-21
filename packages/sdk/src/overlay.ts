@@ -192,6 +192,48 @@ function App(props: { port: number }) {
       return [...ms, { role: "agent", text: delta }];
     });
 
+  // #147 M4 — session continuity across reloads.
+  // Scope by origin (a dev's localhost:3000 = one project; two
+  // projects on different ports get separate keys). Persist the
+  // durable bits (messages, history, autoApply, last selection
+  // hint, the open/collapsed state) — skip transient runtime
+  // (turnBusy, agentReady, in-flight diffs).
+  const storageKey = `insitue:session:${typeof window !== "undefined" ? window.location.origin : "default"}`;
+  const hydratedRef = useRef(false);
+
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    hydratedRef.current = true;
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as {
+        messages?: ChatMsg[];
+        history?: HistoryEntry[];
+        autoApply?: boolean;
+        open?: boolean;
+      };
+      if (Array.isArray(saved.messages)) setMessages(saved.messages);
+      if (Array.isArray(saved.history)) setHistory(saved.history);
+      if (typeof saved.autoApply === "boolean") setAutoApply(saved.autoApply);
+      if (typeof saved.open === "boolean") setOpen(saved.open);
+    } catch {
+      /* corrupt entry — drop it, fresh session */
+    }
+  }, [storageKey]);
+
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    try {
+      window.localStorage.setItem(
+        storageKey,
+        JSON.stringify({ messages, history, autoApply, open }),
+      );
+    } catch {
+      /* quota / private-browsing — non-fatal */
+    }
+  }, [messages, history, autoApply, open, storageKey]);
+
   useEffect(() => {
     installRuntimeCollectors();
     const c = new CompanionClient(props.port, {
