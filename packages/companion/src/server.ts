@@ -31,6 +31,11 @@ export const COMPANION_VERSION = "0.0.0";
 
 export type AgentTransport = "cli-headless" | "mcp" | "sdk";
 
+// Re-export so callers (tests, embedders) can construct providers
+// without reaching into agent-core's deep path.
+export type { AgentProvider } from "@insitue/agent-core/orchestrator";
+import type { AgentProvider } from "@insitue/agent-core/orchestrator";
+
 export interface CompanionOptions {
   port: number;
   /** Agent transport (default cli-headless). */
@@ -41,6 +46,10 @@ export interface CompanionOptions {
   origins: string[];
   /** Absolute project root the companion is scoped to. */
   root: string;
+  /** Test seam — inject a deterministic `AgentProvider` for e2e tests
+   *  that can't depend on Claude Max billing. Plumbed through to
+   *  `AgentOrchestrator` for each WS session. Undefined in production. */
+  provider?: AgentProvider;
 }
 
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -209,6 +218,9 @@ export function startCompanion(opts: CompanionOptions): Server {
             transport: opts.transport ?? "cli-headless",
             allowApiKey: opts.allowApiKey ?? false,
             send: (m) => send(ws, m),
+            // exactOptionalPropertyTypes: don't pass `provider: undefined`,
+            // omit the key entirely if no override.
+            ...(opts.provider ? { provider: opts.provider } : {}),
           });
           void orchestrator.announce();
           return;

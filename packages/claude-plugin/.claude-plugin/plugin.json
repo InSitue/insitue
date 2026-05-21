@@ -1,0 +1,12 @@
+{
+  "name": "insitue",
+  "version": "0.0.1",
+  "description": "Drive a Claude Code session from the InSitue browser overlay. Pick an element in your app, claude reads the file and proposes the edit.",
+  "mcpServers": {
+    "insitue": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"],
+      "cwd": "${CLAUDE_PROJECT_DIR}"
+    }
+  }
+}
