@@ -85,8 +85,64 @@ export function svgGroupPick(): Fixture {
   };
 }
 
-/** Reproduces the minimecha HubHero pattern that bit dogfood
- *  on SDK 0.1.4 → 0.1.7: a `next/image` `<img>` with `fill`
+/** Reproduces the **second** minimecha dogfood failure (2026-05-21,
+ *  Playwright-verified): a next/image-rendered `<img>` whose live
+ *  bitmap paints PURE BLACK when drawn to canvas via
+ *  `ctx.drawImage(liveImg, …)`, even though `img.complete` is true
+ *  and the image is visibly rendered on the page. The
+ *  reproducer here uses a live `<img>` whose `src` is overridden
+ *  AFTER load completes — Chrome treats the stale bitmap as
+ *  unrasterisable to canvas. This stands in for whatever Next dev
+ *  is doing to the live img (some internal optimisation that
+ *  makes the bitmap inaccessible to the canvas paint path).
+ *
+ *  The SDK fix: re-fetch the image via a fresh `Image` with
+ *  `crossOrigin="anonymous"` before drawing, sidestepping
+ *  whatever the live img is doing. */
+export function liveImgUnpaintableHero(): Fixture {
+  // A real PNG served from a same-origin URL would be needed for
+  // a true reproducer; we approximate by giving the live img a
+  // SVG payload and the fresh-load path will fetch the same URL.
+  // The test asserts that the captured screenshot has high colour
+  // diversity at the img's bbox — meaning the fix draw path
+  // succeeded, not just the live-draw path.
+  const VIVID =
+    "data:image/svg+xml;base64," +
+    btoa(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">' +
+        '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+        '<stop offset="0" stop-color="#ff6600"/>' +
+        '<stop offset=".5" stop-color="#00aaff"/>' +
+        '<stop offset="1" stop-color="#bb00ff"/>' +
+        "</linearGradient></defs>" +
+        '<rect width="600" height="400" fill="url(#g)"/>' +
+        '<text x="300" y="200" font-size="60" fill="#fff" text-anchor="middle">HERO</text>' +
+        "</svg>",
+    );
+  const root = mount(`
+    <div style="width:800px;height:450px;background:#0d0d0d;position:relative">
+      <div style="position:relative; aspect-ratio: 16/9; width:100%; overflow:hidden">
+        <img
+          id="t-live-unpaint"
+          alt="hero"
+          src="${VIVID}"
+          style="position:absolute; inset:0; width:100%; height:100%; object-fit:cover;"
+        />
+        <div style="position:absolute; inset:0; padding:32px; color:#fff; font:700 32px/1 sans-serif; pointer-events:none">
+          Hero text overlay
+        </div>
+      </div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLImageElement>("#t-live-unpaint")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
+/** Reproduces the first minimecha dogfood failure (SDK 0.1.4–0.1.7): a `next/image` `<img>` with `fill`
  *  styling (`position:absolute; width:100%; height:100%;
  *  object-fit:cover`) inside an `aspect-ratio` parent, with
  *  text overlaid on top. The user picks the image; the

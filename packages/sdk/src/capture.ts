@@ -146,27 +146,28 @@ async function renderViewportCrop(
   //
   // html-to-image's foreignObject pipeline reliably drops
   // absolutely-positioned `<img>` elements with `srcset` (the
-  // `next/image` `fill` pattern) — the cloned img keeps its
-  // srcset, the browser tries to use unreachable variants, the
-  // canvas paints empty. Detection-only / post-render
-  // verification can spot it but doesn't recover the pixels.
+  // `next/image` `fill` pattern). Even our own `drawImage(liveImg,
+  // …)` produces pure-black pixels for the live element on
+  // minimecha — Next dev's image pipeline leaves the live img's
+  // bitmap inaccessible to canvas (verified via Playwright on the
+  // dogfood page 2026-05-21; live draw → uniform 0,0,0; fresh
+  // `Image()` with `crossOrigin="anonymous"` loading the same URL
+  // → real image pixels).
   //
-  // The fix is structural: draw the live `<img>` directly to the
-  // crop canvas using `ctx.drawImage(liveImg, …)` with proper
-  // object-fit/object-position math. We then filter those imgs
-  // out of the html-to-image render so it composites text/UI on
-  // top of our image layer cleanly. This bypasses every srcset/
-  // foreignObject quirk because we never ask html-to-image to
-  // touch the imgs that hit those quirks.
+  // So we re-fetch each img through a fresh `Image` with CORS,
+  // and draw THAT. Doesn't touch the live DOM (no flash), uses
+  // the browser's HTTP cache so it's usually instant, and the
+  // bitmap is guaranteed canvas-paintable. Then we filter those
+  // imgs out of the html-to-image render so it composites
+  // text/UI on top of our image layer cleanly.
   //
-  // Limitation: we only do this for absolute/fixed-positioned
-  // imgs (the next/image-fill pattern). Inline imgs still go
-  // through html-to-image's normal path — they contribute to
-  // layout and html-to-image handles them fine for CORS-friendly
-  // sources. Cross-origin imgs without a CORS attribute would
-  // taint our canvas if we drew them directly, so we skip those
-  // and let layer-2 catch them.
-  const drawnImgs = drawAbsoluteImagesOnto(
+  // Limitation: only absolute/fixed-positioned imgs. Inline imgs
+  // still go through html-to-image's normal path — they
+  // contribute to layout and html-to-image handles them fine for
+  // CORS-friendly sources. Cross-origin imgs without server CORS
+  // headers will fail the fresh-load → skipped + flagged for
+  // layer-2 escalation.
+  const drawnImgs = await drawAbsoluteImagesOnto(
     ctx,
     cropRect,
     pixelRatio,
@@ -220,84 +221,141 @@ async function renderViewportCrop(
 }
 
 /** Walk every absolutely-positioned `<img>` whose bbox overlaps
- *  the crop region, and draw it directly to `ctx` using
- *  `ctx.drawImage(liveImg, …)` with `object-fit` / `object-position`
- *  math. Returns the set of imgs we successfully drew — the caller
- *  filters those out of the html-to-image render so we don't
- *  double-paint. */
-function drawAbsoluteImagesOnto(
+ *  the crop region, fetch each via a fresh `Image` with
+ *  `crossOrigin="anonymous"`, and draw the fresh bitmap to `ctx`
+ *  with `object-fit` / `object-position` math.
+ *
+ *  Why a fresh `Image` instead of `drawImage(liveImg, …)`: tested
+ *  on minimecha dogfood (2026-05-21, Playwright-verified), the
+ *  live `<img>` rendered by next/image produced uniform black
+ *  pixels when drawn to canvas directly — its bitmap isn't
+ *  accessible to the canvas paint path. A fresh same-URL load
+ *  through the standard image pipeline IS canvas-paintable. We
+ *  use the browser HTTP cache so usually no extra network. */
+async function drawAbsoluteImagesOnto(
   ctx: CanvasRenderingContext2D,
   cropRect: DOMRect,
   pixelRatio: number,
   failedImages: Set<HTMLImageElement>,
-): Set<HTMLImageElement> {
+): Promise<Set<HTMLImageElement>> {
   const drawn = new Set<HTMLImageElement>();
   const imgs = Array.from(
     document.querySelectorAll<HTMLImageElement>("img"),
   ).filter(
     (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
   );
-  for (const img of imgs) {
-    const r = img.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) continue;
-    const cs = getComputedStyle(img);
-    if (cs.position !== "absolute" && cs.position !== "fixed") continue;
-    // Skip imgs that don't overlap the crop.
-    if (
-      r.right < cropRect.x ||
-      r.left > cropRect.x + cropRect.width ||
-      r.bottom < cropRect.y ||
-      r.top > cropRect.y + cropRect.height
-    ) {
-      continue;
-    }
-    // CORS safety — drawing a cross-origin img without a
-    // `crossOrigin` attribute taints the canvas, after which
-    // `toDataURL()` throws. Skip those; layer-2 captures them via
-    // `getDisplayMedia` instead.
-    const src = img.currentSrc || img.src;
-    if (!src) continue;
-    if (
-      crossOrigin(src) &&
-      img.crossOrigin !== "anonymous" &&
-      img.crossOrigin !== "use-credentials"
-    ) {
-      failedImages.add(img);
-      continue;
-    }
-    if (!img.complete || img.naturalWidth === 0 || img.naturalHeight === 0) {
-      // Browser couldn't load it — broken-image state. Layer-2
-      // can't help either, but flagging is the honest thing.
-      failedImages.add(img);
-      continue;
-    }
-    const dest = {
-      x: (r.left - cropRect.x) * pixelRatio,
-      y: (r.top - cropRect.y) * pixelRatio,
-      w: r.width * pixelRatio,
-      h: r.height * pixelRatio,
-    };
-    const source = computeObjectFitSource(img, cs);
-    try {
-      ctx.drawImage(
-        img,
-        source.sx,
-        source.sy,
-        source.sw,
-        source.sh,
-        dest.x,
-        dest.y,
-        dest.w,
-        dest.h,
+
+  /** Per-image hard timeout so one slow asset can't stall the
+   *  whole capture via Promise.allSettled. 3s covers cache-hit +
+   *  a small network round-trip; if it takes longer than that the
+   *  fix isn't going to ship. */
+  const PER_IMAGE_TIMEOUT_MS = 3_000;
+
+  await Promise.allSettled(
+    imgs.map(async (img) => {
+      const r = img.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return;
+      const cs = getComputedStyle(img);
+      if (cs.position !== "absolute" && cs.position !== "fixed") return;
+      // Skip imgs outside the crop region.
+      if (
+        r.right < cropRect.x ||
+        r.left > cropRect.x + cropRect.width ||
+        r.bottom < cropRect.y ||
+        r.top > cropRect.y + cropRect.height
+      ) {
+        return;
+      }
+      const src = img.currentSrc || img.src;
+      if (!src) return;
+      // data:/blob: URLs are inherently same-origin and trivially
+      // drawable; fall through to direct drawImage to avoid the
+      // re-load round-trip.
+      const usesFreshLoad =
+        !src.startsWith("data:") && !src.startsWith("blob:");
+
+      let source: HTMLImageElement;
+      if (usesFreshLoad) {
+        try {
+          source = await loadFresh(src, PER_IMAGE_TIMEOUT_MS);
+        } catch {
+          // Either the server didn't send CORS headers, the URL
+          // was unreachable, or the timeout fired. Flag for
+          // layer-2 escalation; we can't draw this in layer 1.
+          failedImages.add(img);
+          return;
+        }
+      } else {
+        // Live data:/blob: img is paintable.
+        if (!img.complete || img.naturalWidth === 0) {
+          failedImages.add(img);
+          return;
+        }
+        source = img;
+      }
+      // Object-fit math uses the FRESH image's natural dimensions
+      // (Next dev's live img often reports a placeholder size).
+      const objFit = computeObjectFitSource(
+        { naturalWidth: source.naturalWidth, naturalHeight: source.naturalHeight },
+        r.width,
+        r.height,
+        cs.objectFit || "fill",
       );
-      drawn.add(img);
-    } catch {
-      // drawImage can throw on incomplete or cross-origin imgs
-      // even after our checks (rare race). Flag + skip.
-      failedImages.add(img);
-    }
-  }
+      const dest = {
+        x: (r.left - cropRect.x) * pixelRatio,
+        y: (r.top - cropRect.y) * pixelRatio,
+        w: r.width * pixelRatio,
+        h: r.height * pixelRatio,
+      };
+      try {
+        ctx.drawImage(
+          source,
+          objFit.sx,
+          objFit.sy,
+          objFit.sw,
+          objFit.sh,
+          dest.x,
+          dest.y,
+          dest.w,
+          dest.h,
+        );
+        drawn.add(img);
+      } catch {
+        failedImages.add(img);
+      }
+    }),
+  );
   return drawn;
+}
+
+/** Load a URL into a fresh `Image` with `crossOrigin="anonymous"`,
+ *  await decode, return the element. Rejects on load error or
+ *  timeout. The hard timeout matters because one stuck request
+ *  otherwise stalls Promise.allSettled in the caller. */
+function loadFresh(url: string, timeoutMs: number): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    const timer = setTimeout(() => {
+      img.src = ""; // abort
+      reject(new Error("timeout"));
+    }, timeoutMs);
+    img.onload = async () => {
+      clearTimeout(timer);
+      try {
+        await img.decode();
+      } catch {
+        // Decode races aren't fatal; the bitmap is usually ready
+        // anyway. Continue.
+      }
+      resolve(img);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      reject(new Error("load failed"));
+    };
+    img.src = url;
+  });
 }
 
 /** Translate the picked img's `object-fit` + `object-position` into
@@ -306,18 +364,16 @@ function drawAbsoluteImagesOnto(
  *  contain semantics. Object-position is centred-only for now —
  *  most next/image usage is the default `center`. */
 function computeObjectFitSource(
-  img: HTMLImageElement,
-  cs: CSSStyleDeclaration,
+  natural: { naturalWidth: number; naturalHeight: number },
+  dw: number,
+  dh: number,
+  fit: string,
 ): { sx: number; sy: number; sw: number; sh: number } {
-  const nw = img.naturalWidth;
-  const nh = img.naturalHeight;
-  const r = img.getBoundingClientRect();
-  const dw = r.width;
-  const dh = r.height;
+  const nw = natural.naturalWidth;
+  const nh = natural.naturalHeight;
   if (!nw || !nh || !dw || !dh) {
     return { sx: 0, sy: 0, sw: nw || 1, sh: nh || 1 };
   }
-  const fit = cs.objectFit || "fill";
   if (fit === "fill") {
     return { sx: 0, sy: 0, sw: nw, sh: nh };
   }
