@@ -462,7 +462,15 @@ function CaptureOnlyApp(props: AppProps) {
         style: `display:flex;justify-content:space-between;padding:9px 16px;border-top:1px solid ${C.line};color:${C.faint};font-size:11px`,
       },
       [
-        h("span", {}, "🔒 Secrets scrubbed automatically"),
+        // No "Secrets scrubbed" badge — the redaction is narrow
+        // (regex on attr-names + console.log args; see
+        // packages/sdk/src/runtime.ts safeArg, capture-core/dom.ts
+        // serializeNode). Visible password VALUES, URL query
+        // params, and any text rendered in the screenshot pixels
+        // are NOT scrubbed — claiming otherwise misleads reporters
+        // about what's safe to capture. If we ever build real
+        // form-value redaction the badge can come back.
+        h("span", {}, ""),
         h(
           "span",
           { title: `@insitue/sdk@${__SDK_VERSION__}` },
