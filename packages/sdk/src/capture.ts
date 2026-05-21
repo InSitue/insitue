@@ -69,117 +69,20 @@ const IMAGE_PLACEHOLDER =
       )
     : "");
 
-/** Pre-resolve every `<img>` in the document to a data URL by
- *  fetching its `currentSrc` ourselves, base64-encoding it, and
- *  swapping it into the element BEFORE html-to-image clones it.
- *  Sidesteps a whole class of html-to-image quirks:
- *   - next/image / `srcset` confusion: html-to-image reads `.src`
- *     (the fallback URL), not `.currentSrc` (what the browser
- *     actually painted). The wrong URL fetches a different-sized
- *     asset, or worse, fails and the image goes blank.
- *   - same-origin proxy URLs (Next.js `/_next/image?url=...`)
- *     succeed under our `fetch()` but fail opaquely inside
- *     html-to-image's embed pipeline (race between `src=` and the
- *     SVG `foreignObject` serialisation).
- *   - decode timing: pre-decoding here means the image is
- *     paint-ready by the time html-to-image draws the SVG.
- *  Tracks failures so the post-rasterise quality check can decide
- *  whether to escalate to `getDisplayMedia`. */
-async function preResolveImages(cropRect?: DOMRect): Promise<{
-  restore: () => void;
-  failedImages: Set<HTMLImageElement>;
-}> {
-  const restorations: Array<() => void> = [];
-  const failedImages = new Set<HTMLImageElement>();
-
-  // Only resolve images that intersect the crop region (or are
-  // close enough to spill into it). Resolving every image on the
-  // page is wasteful and — worse — one slow/blocked URL would
-  // stall the whole capture via Promise.all. Scoping cuts the
-  // worst case from "every <img>" to "<imgs> visible in the crop".
-  const PAD = 64;
-  const images = Array.from(
-    document.querySelectorAll<HTMLImageElement>("img"),
-  ).filter((img) => {
-    if (img.closest?.("#insitu-root, [data-insitu-layer]")) return false;
-    if (!cropRect) return true;
-    const r = img.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0) return false;
-    return (
-      r.right >= cropRect.x - PAD &&
-      r.left <= cropRect.x + cropRect.width + PAD &&
-      r.bottom >= cropRect.y - PAD &&
-      r.top <= cropRect.y + cropRect.height + PAD
-    );
-  });
-
-  /** Per-image hard timeout. A single hung fetch (slow CDN, blocked
-   *  by an extension, dev-mode optimiser stuck) used to wedge the
-   *  whole capture via `Promise.all`. 3s is generous for cached
-   *  assets and short enough that the worst case is still snappy. */
-  const PER_IMAGE_TIMEOUT_MS = 3_000;
-
-  await Promise.allSettled(
-    images.map(async (img) => {
-      const srcToFetch = img.currentSrc || img.src;
-      if (
-        !srcToFetch ||
-        srcToFetch.startsWith("data:") ||
-        srcToFetch.startsWith("blob:")
-      ) {
-        return;
-      }
-      // AbortController gives us a hard cap on fetch latency. Also
-      // covers the (rare) case where the connection completes but
-      // `blob()` or `FileReader` hangs.
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), PER_IMAGE_TIMEOUT_MS);
-      try {
-        const res = await fetch(srcToFetch, {
-          cache: "force-cache",
-          signal: ac.signal,
-        });
-        if (!res.ok) {
-          failedImages.add(img);
-          return;
-        }
-        const blob = await res.blob();
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(blob);
-        });
-        const origSrc = img.getAttribute("src");
-        const origSrcset = img.getAttribute("srcset");
-        restorations.push(() => {
-          if (origSrc != null) img.setAttribute("src", origSrc);
-          else img.removeAttribute("src");
-          if (origSrcset != null) img.setAttribute("srcset", origSrcset);
-          else img.removeAttribute("srcset");
-        });
-        img.removeAttribute("srcset");
-        img.src = dataUrl;
-        try {
-          await img.decode();
-        } catch {
-          /* decode races aren't fatal */
-        }
-      } catch {
-        failedImages.add(img);
-      } finally {
-        clearTimeout(timer);
-      }
-    }),
-  );
-
-  return {
-    restore: () => {
-      for (const r of restorations) r();
-    },
-    failedImages,
-  };
-}
+// (preResolveImages removed 2026-05-21) — was meant to sidestep
+// html-to-image's srcset / decode-race quirks by fetching imgs
+// ourselves and swapping `.src` to a data URL before clone. In
+// practice it:
+//   1. Caused a visible page-image flash (the live `<img>`
+//      momentarily showed the data URL load cycle).
+//   2. Didn't actually fix next/image: html-to-image still
+//      dropped the img because the underlying problem is layout
+//      (position:absolute + aspect-ratio + object-fit:cover
+//      inside foreignObject), not fetch.
+// The right answer is `detectUnrenderedImages` + layer-2
+// escalation: let html-to-image handle CORS-friendly imgs
+// natively, detect when it silently dropped one (pixel sampling),
+// auto-escalate to `getDisplayMedia` for pixel-perfect.
 
 /** An element we can screenshot — has rect + inline style. Both
  *  HTMLElement and SVGElement (incl. SVGGElement, the "g" group)
@@ -232,60 +135,53 @@ async function renderViewportCrop(
         ? htmlBg
         : "#ffffff";
 
-  // Pre-resolve all <img>s to data URLs ourselves — html-to-image's
-  // own fetch pipeline misses next/image srcset, decode races, and
-  // proxy-URL quirks. Doing it here means by the time toCanvas
-  // clones the DOM, every <img> is already a paint-ready data URL.
-  const { restore: restoreImages, failedImages } =
-    await preResolveImages(cropRect);
-  try {
-    const fullCanvas = await toCanvas(document.documentElement, {
-      pixelRatio,
-      // cacheBust off — we've already swapped srcs to data URLs.
-      cacheBust: false,
-      backgroundColor,
-      imagePlaceholder: IMAGE_PLACEHOLDER,
-      // Strip only our own overlay layers.
-      filter: (n) =>
-        !(
-          n instanceof Element &&
-          n.closest?.("#insitu-root, [data-insitu-layer]")
-        ),
-    });
+  // Trust html-to-image's built-in `embedImages` to handle CORS-
+  // friendly imgs natively (it fetches + inlines as data URLs).
+  // For imgs that fail to render anyway (next/image-style layout
+  // breaks under foreignObject; placeholder fallbacks; etc.) we
+  // catch them with `detectUnrenderedImages` post-render and route
+  // through the layer-2 escalation. Never touches the live DOM, so
+  // no visible page-image flash.
+  const failedImages = new Set<HTMLImageElement>();
+  const fullCanvas = await toCanvas(document.documentElement, {
+    pixelRatio,
+    cacheBust: true,
+    backgroundColor,
+    imagePlaceholder: IMAGE_PLACEHOLDER,
+    filter: (n) =>
+      !(
+        n instanceof Element &&
+        n.closest?.("#insitu-root, [data-insitu-layer]")
+      ),
+  });
 
-    const sx = window.scrollX;
-    const sy = window.scrollY;
-    const out = document.createElement("canvas");
-    out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
-    out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
-    const ctx = out.getContext("2d");
-    if (!ctx) return { dataUrl: null, failedImages };
-    ctx.drawImage(
-      fullCanvas,
-      Math.round((cropRect.x + sx) * pixelRatio),
-      Math.round((cropRect.y + sy) * pixelRatio),
-      Math.round(cropRect.width * pixelRatio),
-      Math.round(cropRect.height * pixelRatio),
-      0,
-      0,
-      out.width,
-      out.height,
-    );
-    if (looksBlankUniform(ctx, out.width, out.height)) {
-      return { dataUrl: null, failedImages };
-    }
-    // Verify each <img> actually rendered into the canvas. Catches
-    // the case where html-to-image silently dropped an image (e.g.
-    // next/image + aspect-ratio + object-fit:cover) without
-    // triggering an obvious error. Flagged imgs join `failedImages`
-    // so layer-2 escalates automatically.
-    detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
-    return { dataUrl: out.toDataURL("image/png"), failedImages };
-  } finally {
-    // Restore original srcs even if rasterise threw — the page must
-    // be visually identical to before the capture.
-    restoreImages();
+  const sx = window.scrollX;
+  const sy = window.scrollY;
+  const out = document.createElement("canvas");
+  out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
+  out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
+  const ctx = out.getContext("2d");
+  if (!ctx) return { dataUrl: null, failedImages };
+  ctx.drawImage(
+    fullCanvas,
+    Math.round((cropRect.x + sx) * pixelRatio),
+    Math.round((cropRect.y + sy) * pixelRatio),
+    Math.round(cropRect.width * pixelRatio),
+    Math.round(cropRect.height * pixelRatio),
+    0,
+    0,
+    out.width,
+    out.height,
+  );
+  if (looksBlankUniform(ctx, out.width, out.height)) {
+    return { dataUrl: null, failedImages };
   }
+  // Verify each <img> actually rendered. Pixel-sample where the
+  // img's bbox should be; if uniformly filled, html-to-image
+  // dropped it (next/image layout break, etc.) — flag for the
+  // layer-2 escalation.
+  detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
+  return { dataUrl: out.toDataURL("image/png"), failedImages };
 }
 
 /** Post-render image verification — for each `<img>` whose bbox
