@@ -116,7 +116,7 @@ interface InSitueCaptureProps {
 
 Every pick the widget submits has a usable source location.
 The picker walks React fiber `_debugSource` first (exact), then
-the `data-insitu-source` attribute injected by
+the `data-insitue-source` attribute injected by
 [`@insitue/sdk/babel`](#babel-plugin) (exact), then the nearest
 owning component's source (approximate). If even that fails,
 the widget refuses to send and asks the user to pick a parent
@@ -130,18 +130,18 @@ Send.
 
 Optional — only needed when your bundler doesn't expose React
 fiber `_debugSource` (Vite, some Webpack setups). Adds a
-`data-insitu-source="file:line:col"` attribute to every
+`data-insitue-source="file:line:col"` attribute to every
 intrinsic JSX element so source resolution stays exact.
 
 ```js
 // vite.config.ts
-import insituBabel from "@insitue/sdk/babel";
+import insitueBabel from "@insitue/sdk/babel";
 
 export default {
   plugins: [
     react({
       babel: {
-        plugins: [[insituBabel, { root: __dirname }]],
+        plugins: [[insitueBabel, { root: __dirname }]],
       },
     }),
   ],

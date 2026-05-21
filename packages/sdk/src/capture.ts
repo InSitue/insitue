@@ -164,7 +164,7 @@ async function renderViewportCrop(
     filter: (n) =>
       !(
         n instanceof Element &&
-        n.closest?.("#insitu-root, [data-insitu-layer]")
+        n.closest?.("#insitue-root, [data-insitue-layer]")
       ),
   });
 
@@ -243,7 +243,7 @@ async function drawAbsoluteImagesOnto(
   const imgs = Array.from(
     document.querySelectorAll<HTMLImageElement>("img"),
   ).filter(
-    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
+    (img) => !img.closest?.("#insitue-root, [data-insitue-layer]"),
   );
 
   /** Per-image hard timeout so one slow asset can't stall the
@@ -431,7 +431,7 @@ function detectUnrenderedImages(
   const imgs = Array.from(
     document.querySelectorAll<HTMLImageElement>("img"),
   ).filter(
-    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
+    (img) => !img.closest?.("#insitue-root, [data-insitue-layer]"),
   );
 
   for (const img of imgs) {
@@ -549,7 +549,7 @@ function assessCaptureQuality(
   for (const el of all) {
     if (
       el instanceof Element &&
-      el.closest?.("#insitu-root, [data-insitu-layer]")
+      el.closest?.("#insitue-root, [data-insitue-layer]")
     ) {
       continue;
     }
@@ -715,13 +715,13 @@ export async function retryDisplayMedia(): Promise<boolean> {
  *  panel and picker UI don't appear in the screenshot. Restores on
  *  the next animation frame so the user barely sees the flicker. */
 function hideOverlayLayersBriefly(): () => void {
-  const id = "insitu-capture-hide";
+  const id = "insitue-capture-hide";
   // Hide via attribute selector so we don't fight specific
   // implementations of the overlay layer.
   const style = document.createElement("style");
   style.id = id;
   style.textContent = `
-    #insitu-root, [data-insitu-layer] { visibility: hidden !important; }
+    #insitue-root, [data-insitue-layer] { visibility: hidden !important; }
   `;
   document.head.appendChild(style);
   return () => {
@@ -1010,7 +1010,7 @@ export async function buildBundle(
     // got set above (an unexpected fallthrough), surface that fact
     // so the widget never renders a blank where a result should be.
     // The structured diagnostic below tells future-me exactly which
-    // branch ran, surfaced as `__insitu_capture__.bundle` in dev.
+    // branch ran, surfaced as `__insitue_capture__.bundle` in dev.
     ...(screenshotUnavailable
       ? { screenshotUnavailable }
       : !screenshot

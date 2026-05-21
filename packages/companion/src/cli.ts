@@ -113,7 +113,7 @@ function startDev(opts: DevOpts): void {
     `[insitue] companion ${COMPANION_VERSION} on 127.0.0.1:${port}\n` +
       `[insitue] scoped to ${root}\n` +
       `[insitue] origins: ${originsLabel}\n` +
-      `[insitue] session token written to .insitu/session.json\n` +
+      `[insitue] session token written to .insitue/session.json\n` +
       `[insitue] tip: \`insitue connect\` in another terminal to pipe picks to your AI tool`,
   );
 }

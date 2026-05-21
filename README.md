@@ -148,7 +148,7 @@ cloud's HTTPS endpoint OR to the local companion's loopback WS.
 
 - **Companion**: loopback-only bind (refuses non-127.0.0.1 at
   the socket), per-session token written to
-  `.insitu/session.json` (gitignored), Origin pin on every
+  `.insitue/session.json` (gitignored), Origin pin on every
   browser connection.
 - **Cloud**: publishable `projectKey` is Origin-pinned and
   quota-gated server-side. Spend caps + per-project allow-lists.

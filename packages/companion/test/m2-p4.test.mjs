@@ -17,7 +17,7 @@ import { applyEdits } from "../dist/edit/mutator.js";
 import { checkpoint, restore } from "../dist/edit/git.js";
 
 test("applyEdits: writes & creates files, refuses escapes", () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p4-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p4-"));
   writeFileSync(join(root, "a.txt"), "old\n");
 
   const res = applyEdits(root, [
@@ -35,7 +35,7 @@ test("applyEdits: writes & creates files, refuses escapes", () => {
 });
 
 test("checkpoint + restore: round-trips edits and deletes new files", async () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p4ck-")); // not a git repo → fs fallback
+  const root = mkdtempSync(join(tmpdir(), "insitue-p4ck-")); // not a git repo → fs fallback
   writeFileSync(join(root, "keep.tsx"), "ORIGINAL\n");
 
   const cp = await checkpoint(root, ["keep.tsx", "brand-new.tsx"]);

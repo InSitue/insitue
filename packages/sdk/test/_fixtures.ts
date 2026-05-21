@@ -23,7 +23,7 @@ export interface Fixture {
 
 function mount(html: string): HTMLElement {
   const root = document.createElement("div");
-  root.dataset["insituFixture"] = "1";
+  root.dataset["insitueFixture"] = "1";
   // Inline-block at a known position so getBoundingClientRect
   // returns values we can reason about in assertions.
   root.style.position = "fixed";

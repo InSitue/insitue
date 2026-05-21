@@ -36,7 +36,7 @@ export interface InSitueCaptureProps {
   /**
    * Take over delivery yourself. Wins over `projectKey` AND
    * `sink`. Default (none set + no companion reachable): console +
-   * JSON download + `window.__insitu_capture__`.
+   * JSON download + `window.__insitue_capture__`.
    */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
   /**

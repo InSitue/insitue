@@ -14,7 +14,7 @@ createRoot(document.getElementById("root")!).render(
     {prod ? (
       <InSitueCapture
         onCapture={(draft, bundle) => {
-          (window as unknown as Record<string, unknown>).__insitu_capture__ =
+          (window as unknown as Record<string, unknown>).__insitue_capture__ =
             { draft, bundle };
         }}
       />

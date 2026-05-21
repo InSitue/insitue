@@ -1,7 +1,7 @@
 /**
  * #147 M1: terminal-pipe subscribers (`insitue connect`). Browser
  * picks must fan out to any authed CLI subscriber on the
- * /insitu/cli upgrade path. Loopback + token + URL-path are the
+ * /insitue/cli upgrade path. Loopback + token + URL-path are the
  * trust boundary; Origin is intentionally skipped because CLIs
  * don't have one. Run after `pnpm build`.
  */
@@ -16,13 +16,13 @@ import { PROTOCOL_VERSION } from "@insitue/capture-core";
 
 const PORT = 5794;
 const ORIGIN = "http://localhost:3000";
-const root = mkdtempSync(join(tmpdir(), "insitu-m5-"));
+const root = mkdtempSync(join(tmpdir(), "insitue-m5-"));
 
 const server = startCompanion({ port: PORT, origins: [ORIGIN], root });
 await new Promise((r) => server.once("listening", r));
 
 async function handshake() {
-  const res = await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+  const res = await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
     headers: { origin: ORIGIN },
   });
   const json = await res.json();
@@ -49,9 +49,9 @@ function once(ws, predicate, timeoutMs = 2000) {
   });
 }
 
-test("CLI subscribes via /insitu/cli without an Origin header", async () => {
+test("CLI subscribes via /insitue/cli without an Origin header", async () => {
   const token = await handshake();
-  const cli = wsClient(`ws://127.0.0.1:${PORT}/insitu/cli`, {
+  const cli = wsClient(`ws://127.0.0.1:${PORT}/insitue/cli`, {
     "user-agent": "insitue-cli/2",
   });
   await new Promise((r) => cli.once("open", r));
@@ -68,7 +68,7 @@ test("browser capture is fanned out to the CLI subscriber", async () => {
   const token = await handshake();
 
   // CLI: subscribe.
-  const cli = wsClient(`ws://127.0.0.1:${PORT}/insitu/cli`, {
+  const cli = wsClient(`ws://127.0.0.1:${PORT}/insitue/cli`, {
     "user-agent": "insitue-cli/2",
   });
   await new Promise((r) => cli.once("open", r));

@@ -164,13 +164,13 @@ loop. Restart it.
 **I want to run the companion myself**
 You can — `npx @insitue/companion@latest dev` in any terminal.
 The MCP server detects an existing companion at
-`.insitu/session.json` and reuses it instead of spawning its
+`.insitue/session.json` and reuses it instead of spawning its
 own. Use this when you want to see the companion's logs
 directly, or for debugging.
 
 **It's still not working**
 Open an issue at <https://github.com/InSitue/insitue/issues>
-with the contents of `.insitu/session.json` and the last ~20
+with the contents of `.insitue/session.json` and the last ~20
 lines from the `claude` transcript. The MCP server logs
 extensively to stderr; claude surfaces them in the transcript.
 
@@ -180,7 +180,7 @@ extensively to stderr; claude surfaces them in the transcript.
 
 The plugin is a stdio MCP server that:
 
-1. On startup, reads `${CLAUDE_PROJECT_DIR}/.insitu/session.json`
+1. On startup, reads `${CLAUDE_PROJECT_DIR}/.insitue/session.json`
    to find a running companion. If one's alive, reuse it.
 2. Otherwise spawns `npx -y @insitue/companion@latest dev` as a
    child process, polls for the new `session.json` to appear,

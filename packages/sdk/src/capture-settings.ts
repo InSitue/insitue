@@ -34,8 +34,8 @@ const DEFAULT_SETTINGS: CaptureSettings = {
 };
 
 function storageKey(): string {
-  if (typeof location === "undefined") return "insitu:capture-settings";
-  return `insitu:capture-settings:${location.host}`;
+  if (typeof location === "undefined") return "insitue:capture-settings";
+  return `insitue:capture-settings:${location.host}`;
 }
 
 let cached: CaptureSettings | null = null;

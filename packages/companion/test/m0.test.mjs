@@ -15,7 +15,7 @@ import { PROTOCOL_VERSION } from "@insitue/capture-core";
 const PORT = 5793;
 const GOOD_ORIGIN = "http://localhost:3000";
 const BAD_ORIGIN = "http://evil.example";
-const root = mkdtempSync(join(tmpdir(), "insitu-m0-"));
+const root = mkdtempSync(join(tmpdir(), "insitue-m0-"));
 
 const server = startCompanion({ port: PORT, origins: [GOOD_ORIGIN], root });
 await new Promise((r) => server.once("listening", r));
@@ -27,14 +27,14 @@ test("binds loopback only", () => {
 });
 
 test("handshake rejects a foreign Origin (403)", async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+  const res = await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
     headers: { origin: BAD_ORIGIN },
   });
   assert.equal(res.status, 403);
 });
 
 test("handshake issues a token to the pinned Origin", async () => {
-  const res = await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+  const res = await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
     headers: { origin: GOOD_ORIGIN },
   });
   assert.equal(res.status, 200);
@@ -63,7 +63,7 @@ test("WS upgrade refused for a foreign Origin", async () => {
 
 test("WS rejects a bad token", async () => {
   const { token } = await (
-    await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+    await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
       headers: { origin: GOOD_ORIGIN },
     })
   ).json();
@@ -73,7 +73,7 @@ test("WS rejects a bad token", async () => {
 
 test("WS rejects a bad protocol version", async () => {
   const { token } = await (
-    await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+    await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
       headers: { origin: GOOD_ORIGIN },
     })
   ).json();
@@ -83,7 +83,7 @@ test("WS rejects a bad protocol version", async () => {
 
 test("secure ping round-trip on a valid session", async () => {
   const { token } = await (
-    await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+    await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
       headers: { origin: GOOD_ORIGIN },
     })
   ).json();

@@ -1,6 +1,6 @@
 /**
  * Babel fallback: stamp every intrinsic JSX element with
- * `data-insitu-source="relpath:line:col"`. The resolver prefers React
+ * `data-insitue-source="relpath:line:col"`. The resolver prefers React
  * fiber `_debugSource` (Next dev provides it for free); this is the
  * portable fallback for Vite/CRA/Babel setups or where fiber source
  * is absent. DEV ONLY — never wire this into a production build.
@@ -21,12 +21,12 @@ interface PluginState {
   filename?: string;
 }
 
-export default function insituSourcePlugin(babel: {
+export default function insitueSourcePlugin(babel: {
   types: BabelTypes;
 }): { name: string; visitor: Record<string, unknown> } {
   const t = babel.types;
   return {
-    name: "insitu-source",
+    name: "insitue-source",
     visitor: {
       JSXOpeningElement(
         path: {
@@ -49,7 +49,7 @@ export default function insituSourcePlugin(babel: {
         if (c0 < "a" || c0 > "z") return;
         if (
           node.attributes.some(
-            (a) => a.type === "JSXAttribute" && a.name?.name === "data-insitu-source",
+            (a) => a.type === "JSXAttribute" && a.name?.name === "data-insitue-source",
           )
         )
           return;
@@ -62,7 +62,7 @@ export default function insituSourcePlugin(babel: {
         const value = `${rel}:${loc.start.line}:${loc.start.column + 1}`;
         node.attributes.push(
           t.jsxAttribute(
-            t.jsxIdentifier("data-insitu-source"),
+            t.jsxIdentifier("data-insitue-source"),
             t.stringLiteral(value),
           ) as never,
         );

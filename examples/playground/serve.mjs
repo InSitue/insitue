@@ -51,7 +51,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(
-    `[insitu playground] http://localhost:${PORT}\n` +
+    `[insitue playground] http://localhost:${PORT}\n` +
       `  1. keep \`pnpm dev\` (or run \`pnpm build\`) so packages/sdk/dist exists\n` +
       `  2. in another terminal: \`pnpm companion\`\n` +
       `  3. open the URL above — the InSitue pill should go green and Ping should work`,

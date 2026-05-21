@@ -51,7 +51,7 @@ test("parseProposals: multiple blocks, WHY optional, truncation tolerated", () =
 });
 
 test("buildChangeset: diffs changed file, skips no-change & escapes", () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p3-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p3-"));
   writeFileSync(join(root, "x.txt"), "old\n");
   writeFileSync(join(root, "same.txt"), "keep\n");
 

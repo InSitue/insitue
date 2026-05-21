@@ -14,12 +14,12 @@ import { PROTOCOL_VERSION } from "@insitue/capture-core";
 
 const PORT = 5795;
 const ORIGIN = "http://localhost:3000";
-const root = mkdtempSync(join(tmpdir(), "insitu-m2-"));
+const root = mkdtempSync(join(tmpdir(), "insitue-m2-"));
 const server = startCompanion({ port: PORT, origins: [ORIGIN], root });
 await new Promise((r) => server.once("listening", r));
 
 async function token() {
-  const res = await fetch(`http://127.0.0.1:${PORT}/insitu/handshake`, {
+  const res = await fetch(`http://127.0.0.1:${PORT}/insitue/handshake`, {
     headers: { origin: ORIGIN },
   });
   return (await res.json()).token;

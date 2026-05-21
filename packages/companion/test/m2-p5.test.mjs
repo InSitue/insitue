@@ -71,7 +71,7 @@ test("normalizeNative: result error → agent-error(transport)", () => {
 });
 
 test("git-mode checkpoint/restore is byte-exact (trailing newline)", async () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p5git-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p5git-"));
   execFileSync("git", ["init", "-q"], { cwd: root });
   // Content that ends in a newline — the case execa's default
   // newline-trim silently corrupted before the fix.
@@ -94,7 +94,7 @@ test("git-mode checkpoint/restore is byte-exact (trailing newline)", async () =>
 });
 
 test("scripted turn → identical changeset across any transport", () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p5-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p5-"));
   writeFileSync(join(root, "App.tsx"), 'const p = "8px 16px";\n');
 
   // An edit-proposal block split across deltas (streaming reality):

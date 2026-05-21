@@ -63,7 +63,7 @@ export class CompanionClient {
     this.events.onState("connecting");
     let token: string;
     try {
-      const res = await fetch(`${this.base}/insitu/handshake`);
+      const res = await fetch(`${this.base}/insitue/handshake`);
       if (!res.ok) throw new Error(`handshake ${res.status}`);
       token = (await res.json()).token as string;
     } catch (e) {

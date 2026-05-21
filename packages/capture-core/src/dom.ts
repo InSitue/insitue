@@ -5,7 +5,7 @@
 import type { SerializedNode } from "./index.js";
 
 const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
-const ATTR_DENY = /^(on|data-insitu)/i;
+const ATTR_DENY = /^(on|data-insitue)/i;
 const SECRETISH = /(token|secret|key|password|authorization|bearer)/i;
 
 /** Prune + sanitize a subtree: depth/breadth-capped, event handlers

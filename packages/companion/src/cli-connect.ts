@@ -10,9 +10,9 @@
  *   $ insitue connect --json | jq '.resolved.file'
  *
  * Auth: same loopback + session-token model the browser uses.
- * The companion writes the token to `<root>/.insitu/session.json`
+ * The companion writes the token to `<root>/.insitue/session.json`
  * when it starts; we look it up from the cwd by walking up to find
- * the nearest `.insitu` directory. No new persistent secret.
+ * the nearest `.insitue` directory. No new persistent secret.
  *
  * `--mcp` is a follow-up commit (M1.5) — it wraps the existing
  * MCP-server module so the dev's Claude session can pull the
@@ -52,14 +52,14 @@ interface BroadcastCapture {
   at: string;
 }
 
-/** Walk up from cwd to find the nearest `.insitu/session.json`. */
+/** Walk up from cwd to find the nearest `.insitue/session.json`. */
 function findSession(start = process.cwd()): {
   dir: string;
   session: SessionFile;
 } | null {
   let dir = resolve(start);
   while (true) {
-    const candidate = join(dir, ".insitu", "session.json");
+    const candidate = join(dir, ".insitue", "session.json");
     if (existsSync(candidate)) {
       try {
         const session = JSON.parse(readFileSync(candidate, "utf8")) as SessionFile;
@@ -89,7 +89,7 @@ export async function runConnect(opts: ConnectOpts): Promise<void> {
   }
   const { dir, session } = found;
 
-  const url = `ws://127.0.0.1:${session.port}/insitu/cli`;
+  const url = `ws://127.0.0.1:${session.port}/insitue/cli`;
   const ws = new WebSocket(url, {
     headers: {
       // Loopback + token are the real auth boundary; the

@@ -71,7 +71,7 @@ not need to ask the user to run any extra commands.
 
 - **`source.file` doesn't exist**: tell the user the path the
   pick resolved to and ask if they're in the right project
-  directory. The MCP server reads `.insitu/session.json` from
+  directory. The MCP server reads `.insitue/session.json` from
   the cwd `claude` was started in.
 - **The edit doesn't HMR cleanly**: surface the build error in
   chat (run `cat` or relevant logs if you can find them); don't

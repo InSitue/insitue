@@ -3,7 +3,7 @@
  * `__reactFiber$*` expando React attaches to host DOM nodes in dev,
  * walks `_debugOwner`/`return`, and harvests `_debugSource`
  * ({ fileName, lineNumber, columnNumber }) plus component names.
- * Falls back to a build-injected `data-insitu-source` attribute.
+ * Falls back to a build-injected `data-insitue-source` attribute.
  */
 import type {
   CaptureTarget,
@@ -55,11 +55,11 @@ function toLoc(workspaceCwdRelative: DebugSource): SourceLoc | null {
   };
 }
 
-/** Parse a build-injected `data-insitu-source="relpath:line:col"`. */
+/** Parse a build-injected `data-insitue-source="relpath:line:col"`. */
 function fromAttribute(el: Element): SourceLoc | null {
   let cur: Element | null = el;
   for (let i = 0; cur && i < 8; i++, cur = cur.parentElement) {
-    const raw = cur.getAttribute("data-insitu-source");
+    const raw = cur.getAttribute("data-insitue-source");
     if (raw) {
       const m = /^(.*):(\d+):(\d+)$/.exec(raw);
       if (m) return { file: m[1]!, line: Number(m[2]), column: Number(m[3]) };
@@ -90,7 +90,7 @@ export function resolveTarget(el: Element): CaptureTarget {
 
   // Best source, best confidence:
   //  1. host fiber _debugSource (the JSX site of the element)  → exact
-  //  2. build-injected data-insitu-source attribute            → exact
+  //  2. build-injected data-insitue-source attribute            → exact
   //  3. nearest owning component with _debugSource             → approximate
   //  4. nothing                                                → selector-only
   let source: SourceLoc | undefined;

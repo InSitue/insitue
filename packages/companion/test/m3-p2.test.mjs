@@ -15,7 +15,7 @@ const git = (root, ...args) =>
   execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
 
 test("commitFiles commits only the given paths; others untouched", async () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p2-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p2-"));
   git(root, "init", "-q");
   git(root, "config", "user.email", "t@t.t");
   git(root, "config", "user.name", "T");
@@ -47,7 +47,7 @@ test("commitFiles commits only the given paths; others untouched", async () => {
 });
 
 test("commitFiles refuses outside a git repo", async () => {
-  const root = mkdtempSync(join(tmpdir(), "insitu-p2ng-"));
+  const root = mkdtempSync(join(tmpdir(), "insitue-p2ng-"));
   writeFileSync(join(root, "x.txt"), "x");
   await assert.rejects(
     () => commitFiles(root, ["x.txt"], "m"),

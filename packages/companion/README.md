@@ -28,13 +28,13 @@ npx @insitue/companion@latest dev
 The companion:
 
 - Binds to `127.0.0.1:5747` (loopback ONLY).
-- Writes `.insitu/session.json` containing a per-session token.
+- Writes `.insitue/session.json` containing a per-session token.
 - Accepts any `http://localhost:*` or `http://127.0.0.1:*`
   Origin by default (`--allow-localhost` is on for `dev`).
 - Allows additional Origins via `-o https://my-tunnel.cf`.
 
 That's it. Your browser-side `<InSitueCapture />` finds the
-session token via `.insitu/session.json`, opens a WS, and starts
+session token via `.insitue/session.json`, opens a WS, and starts
 streaming picks.
 
 ## Pipe to a tool
@@ -73,7 +73,7 @@ git, and spawns processes. Its trust boundary is:
 
 1. **Loopback bind only**. It refuses any non-127.0.0.1
    connection at the socket layer.
-2. **Per-session token** written to `.insitu/session.json`.
+2. **Per-session token** written to `.insitue/session.json`.
    Every WS connection must present the token in its `hello`
    message. The file is gitignored.
 3. **Origin pin** (defense in depth, not the primary auth).
@@ -95,7 +95,7 @@ It is a localhost dev tool by design.
 └──────────────────┘                           │   - resolves     │
                                                │     pick → src   │
 ┌──────────────────┐  ws://127.0.0.1:5747/     │   - broadcasts   │
-│  Subscribers     │      insitu/cli           │     to subs      │
+│  Subscribers     │      insitue/cli           │     to subs      │
 │  (claude-plugin, │ ◄────────────────────────►│                  │
 │   insitue        │                           │                  │
 │   connect, …)    │                           └──────────────────┘
@@ -103,7 +103,7 @@ It is a localhost dev tool by design.
 ```
 
 Browser sends `{ t: "capture", bundle }`. Companion resolves
-`bundle.target.source` against `.insitu/session.json`'s root
+`bundle.target.source` against `.insitue/session.json`'s root
 directory (read filesystem, get the real `file:line:col` plus
 a snippet), broadcasts `{ t: "broadcast-capture", bundle,
 resolved }` to all subscribers. Subscribers (e.g. the

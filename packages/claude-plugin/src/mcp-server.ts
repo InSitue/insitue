@@ -9,7 +9,7 @@
  *   1. MCP server boots inside `${CLAUDE_PROJECT_DIR}` (declared by
  *      plugin.json's `cwd: "${CLAUDE_PROJECT_DIR}"`).
  *   2. `ensureCompanion()` checks for an existing companion at
- *      `.insitu/session.json`. If one is alive on its port, reuse
+ *      `.insitue/session.json`. If one is alive on its port, reuse
  *      it (the user might've run `insitue dev` themselves and we
  *      don't want to fight them). Otherwise spawn one via
  *      `npx -y @insitue/companion@latest dev` as a child process,
@@ -25,7 +25,7 @@
  * bundle. The widget now defers the broadcast until the user
  * clicks Send, so there's no async join logic on this side.
  *
- * Hard rules: loopback-only, token-auth via `.insitu/session.json`,
+ * Hard rules: loopback-only, token-auth via `.insitue/session.json`,
  * never writes files (claude does, via its native Edit tool).
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -70,14 +70,14 @@ const MAX_BUFFERED_PICKS = 32;
 const NEXT_PICK_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const NEXT_PICK_MAX_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Walk up from `start` looking for `.insitu/session.json`. */
+/** Walk up from `start` looking for `.insitue/session.json`. */
 function findSession(start = process.cwd()): {
   dir: string;
   session: SessionFile;
 } | null {
   let dir = resolve(start);
   while (true) {
-    const candidate = join(dir, ".insitu", "session.json");
+    const candidate = join(dir, ".insitue", "session.json");
     if (existsSync(candidate)) {
       try {
         const session = JSON.parse(
@@ -220,7 +220,7 @@ async function probeCompanion(
       {
         host: "127.0.0.1",
         port: session.port,
-        path: "/insitu/handshake",
+        path: "/insitue/handshake",
         method: "GET",
         timeout: 1500,
       },
@@ -332,7 +332,7 @@ process.on("SIGTERM", () => {
 const buffer = new PickBuffer();
 
 function connectToCompanion(session: SessionFile): void {
-  const url = `ws://127.0.0.1:${session.port}/insitu/cli`;
+  const url = `ws://127.0.0.1:${session.port}/insitue/cli`;
   const ws = new WebSocket(url, {
     headers: { "user-agent": "insitue-claude-plugin" },
   });

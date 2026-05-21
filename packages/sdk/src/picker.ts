@@ -9,7 +9,7 @@ import type { SelectionInput, SelectionMode } from "@insitue/capture-core";
 const ACCENT = "#ff6b00";
 
 function isOurs(el: Element | null): boolean {
-  return !!el?.closest?.("#insitu-root, [data-insitu-layer]");
+  return !!el?.closest?.("#insitue-root, [data-insitue-layer]");
 }
 
 export function beginPick(
@@ -17,7 +17,7 @@ export function beginPick(
 ): Promise<SelectionInput | null> {
   return new Promise((resolve) => {
     const layer = document.createElement("div");
-    layer.setAttribute("data-insitu-layer", "");
+    layer.setAttribute("data-insitue-layer", "");
     Object.assign(layer.style, {
       position: "fixed",
       inset: "0",

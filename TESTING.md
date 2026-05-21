@@ -27,7 +27,7 @@ pnpm companion        # companion on 127.0.0.1:5747
 
 Open <http://localhost:3000>. Bottom-left pill should turn **green**
 and read `companion 0.0.0`; click **Ping** → it shows the round-trip ms.
-The overlay lives in a Shadow DOM (`#insitu-root`), fully style-isolated
+The overlay lives in a Shadow DOM (`#insitue-root`), fully style-isolated
 from the page.
 
 Verified automatically (Playwright): pill mounts in shadow DOM,
@@ -38,11 +38,11 @@ connects, `Ping (1ms)`.
 ```sh
 # Origin pinning — pinned origin gets a token:
 curl -s -H "Origin: http://localhost:3000" \
-  http://127.0.0.1:5747/insitu/handshake
+  http://127.0.0.1:5747/insitue/handshake
 
 # Foreign origin is refused:
 curl -s -o /dev/null -w "%{http_code}\n" \
-  -H "Origin: http://evil.test" http://127.0.0.1:5747/insitu/handshake   # 403
+  -H "Origin: http://evil.test" http://127.0.0.1:5747/insitue/handshake   # 403
 
 # Prod-build refusal (companion must never run in prod):
 NODE_ENV=production node packages/companion/dist/cli.js
@@ -61,7 +61,7 @@ pnpm license:check    # fails if any production dep is non-permissive
 ## 5. Dogfood in a real app (manual, dev-only — your call)
 
 Add to a host app's root layout, dev-guarded, then run its dev server +
-`npx insitu` from that repo root:
+`npx insitue` from that repo root:
 
 ```tsx
 {process.env.NODE_ENV === "development" && <InSitu />}

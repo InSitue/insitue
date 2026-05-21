@@ -64,7 +64,7 @@ export interface CaptureOnlyOptions {
   /**
    * Take over delivery yourself. Wins over `projectKey` AND `sink`.
    * Default (neither set + no companion reachable): console + JSON
-   * download + `window.__insitu_capture__` (useful for prod
+   * download + `window.__insitue_capture__` (useful for prod
    * validation).
    */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
@@ -104,7 +104,7 @@ function resolveSink(opts: CaptureOnlyOptions): CaptureSink {
 }
 
 /** Cloud sink — HTTPS POST. Best-effort; the cloud dedupes retries
- *  server-side, and the bundle is in `window.__insitu_capture__` as a
+ *  server-side, and the bundle is in `window.__insitue_capture__` as a
  *  fallback hook regardless of network state. */
 async function postCloud(
   sink: Extract<CaptureSink, { kind: "cloud" }>,
@@ -185,7 +185,7 @@ const DEV = {
 };
 
 function defaultDeliver(draft: IssueDraft): void {
-  (globalThis as Record<string, unknown>).__insitu_capture__ = {
+  (globalThis as Record<string, unknown>).__insitue_capture__ = {
     title: draft.title,
     body: draft.body,
     bundle: draft.bundle,
@@ -306,7 +306,7 @@ function CaptureApp(props: AppProps) {
   };
 
   const sink = new IssueTrackerSink(async (draft) => {
-    (globalThis as Record<string, unknown>).__insitu_capture__ = {
+    (globalThis as Record<string, unknown>).__insitue_capture__ = {
       title: draft.title,
       body: draft.body,
       bundle: draft.bundle,
@@ -441,32 +441,36 @@ function CaptureApp(props: AppProps) {
     const picking = phase === "picking";
     const offline = isDev && companionState !== "connected";
 
-    // Dev launcher: just the dot. No pill, no label. Picking state
-    // becomes a pulsing dot; idle is a solid dot (or grey when
-    // companion offline). Cloud keeps the labelled pill below.
+    // Dev launcher: the cloud pill shape minus the label. A small
+    // circular surface container with just the dot inside — same
+    // style as cloud's "Report a problem" button, no text. The
+    // picking state pulses the inner dot.
     if (isDev) {
       const dotColor = offline ? "#9a9aa4" : CLOUD.accentSolid;
-      const ringColor = offline
-        ? "rgba(154,154,164,.4)"
-        : "rgba(87,81,230,.45)";
+      const innerShadow = offline ? "none" : `0 1px 4px ${CLOUD.accentRing}`;
       return h(
         "button",
         {
           onClick: picking ? undefined : () => void startPick(),
-          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;width:20px;height:20px;border-radius:5px;background:${dotColor};box-shadow:0 4px 14px ${ringColor};cursor:${picking ? "default" : "pointer"};${picking ? "animation:ipulse 1.1s ease-in-out infinite;" : ""}transition:transform .15s ease`,
+          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${C.surface};border:1px solid ${C.line};border-radius:50%;box-shadow:${C.shadow}`,
           title: picking
             ? "Click an element · Esc to cancel"
             : offline
               ? "InSitue companion not running — start `claude` with /insitue:connect"
               : "Pick an element to talk to claude about",
         },
-        picking
-          ? h(
-              "style",
-              {},
-              "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
-            )
-          : null,
+        [
+          h("span", {
+            style: `width:11px;height:11px;border-radius:3px;background:${dotColor};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
+          }),
+          picking
+            ? h(
+                "style",
+                {},
+                "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
+              )
+            : null,
+        ],
       );
     }
 
@@ -796,8 +800,8 @@ export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   }
   const sink = resolveSink(opts);
   const host = document.createElement("div");
-  host.id = "insitu-capture-root";
-  host.setAttribute("data-insitu", "");
+  host.id = "insitue-capture-root";
+  host.setAttribute("data-insitue", "");
   document.body.appendChild(host);
   const shadow = host.attachShadow({ mode: "open" });
   const mount = document.createElement("div");

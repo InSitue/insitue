@@ -128,19 +128,19 @@ function send(ws: WebSocket, msg: ServerMessage): void {
 export function startCompanion(opts: CompanionOptions): Server {
   if (process.env.NODE_ENV === "production") {
     throw new Error(
-      "[insitu] refusing to start under NODE_ENV=production — InSitue is a localhost dev tool.",
+      "[insitue] refusing to start under NODE_ENV=production — InSitue is a localhost dev tool.",
     );
   }
 
-  // Per-session token. Written to .insitu/session.json so the dev
+  // Per-session token. Written to .insitue/session.json so the dev
   // app can read it; printed too. We also write a `.gitignore` next
-  // to it that ignores the whole `.insitu/` directory — so the
+  // to it that ignores the whole `.insitue/` directory — so the
   // first time the companion runs in a project, the token never
   // leaks into git even if the user has zero existing gitignore
   // discipline. NOTE (M1): tighten delivery so only the dev server
   // — not any local process — can obtain it.
   const token = randomBytes(24).toString("base64url");
-  const sessionDir = join(opts.root, ".insitu");
+  const sessionDir = join(opts.root, ".insitue");
   mkdirSync(sessionDir, { recursive: true });
   writeFileSync(
     join(sessionDir, "session.json"),
@@ -148,7 +148,7 @@ export function startCompanion(opts: CompanionOptions): Server {
   );
   try {
     // Defense in depth — top-level .gitignore may or may not exclude
-    // .insitu/. This local one is unambiguous.
+    // .insitue/. This local one is unambiguous.
     writeFileSync(
       join(sessionDir, ".gitignore"),
       "# Auto-created by @insitue/companion. Holds your per-session\n" +
@@ -172,7 +172,7 @@ export function startCompanion(opts: CompanionOptions): Server {
 
   const http = createServer((req, res) => {
     // Loopback-only, Origin-pinned token handshake.
-    if (req.method === "GET" && req.url === "/insitu/handshake") {
+    if (req.method === "GET" && req.url === "/insitue/handshake") {
       if (!isLoopback(req) || !originOk(req)) {
         res.writeHead(403).end("forbidden");
         return;
@@ -200,7 +200,7 @@ export function startCompanion(opts: CompanionOptions): Server {
   // presence pushes to. The overlay listens for these to toggle
   // its "→ claude in terminal" badge and route Send to external.
   const browserClients = new Set<WebSocket>();
-  const CLI_PATH = "/insitu/cli";
+  const CLI_PATH = "/insitue/cli";
 
   function broadcastSubscriberCount(): void {
     const msg = JSON.stringify({
@@ -309,7 +309,7 @@ export function startCompanion(opts: CompanionOptions): Server {
         if (msg.t === "capture") {
           const bundle = msg.bundle as unknown as CaptureBundle;
           const { resolved, note } = resolveCapture(opts.root, bundle);
-          console.log(`[insitu] capture ${bundle.id}: ${note}`);
+          console.log(`[insitue] capture ${bundle.id}: ${note}`);
           orchestrator?.registerBundle(bundle, resolved);
           send(ws, {
             t: "capture-resolved",
