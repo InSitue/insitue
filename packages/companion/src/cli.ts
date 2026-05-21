@@ -31,8 +31,8 @@ function devOptions(cmd: Command): Command {
     .option("-p, --port <number>", "loopback port", "5747")
     .option(
       "-o, --origin <origin...>",
-      "allowed dev-app origin(s)",
-      ["http://localhost:3000", "http://127.0.0.1:3000"],
+      "additional allowed dev-app origin(s) on top of localhost wildcard",
+      [],
     )
     .option("-r, --root <path>", "project root to scope to", process.cwd())
     .option(
@@ -44,6 +44,13 @@ function devOptions(cmd: Command): Command {
       "--allow-api-key",
       "let ANTHROPIC_API_KEY reach the agent (bills the API, not your Max plan)",
       false,
+    )
+    .option(
+      "--strict-origins",
+      "require an explicit --origin allowlist (disables localhost wildcard). " +
+        "Off by default for `dev` so users don't have to know their dev port. " +
+        "The loopback bind + per-session token remain the auth boundary regardless.",
+      false,
     );
 }
 
@@ -53,6 +60,7 @@ interface DevOpts {
   root: string;
   agentTransport: string;
   allowApiKey: boolean;
+  strictOrigins: boolean;
 }
 
 function startDev(opts: DevOpts): void {
@@ -74,6 +82,7 @@ function startDev(opts: DevOpts): void {
     server = startCompanion({
       port,
       origins: opts.origin,
+      allowLocalhost: !opts.strictOrigins,
       root,
       transport,
       allowApiKey: opts.allowApiKey,
@@ -93,10 +102,17 @@ function startDev(opts: DevOpts): void {
     }
     process.exit(1);
   });
+  const originsLabel = opts.strictOrigins
+    ? opts.origin.length
+      ? opts.origin.join(", ")
+      : "(none — strict mode + empty list = nothing allowed)"
+    : opts.origin.length
+      ? `localhost:* + ${opts.origin.join(", ")}`
+      : "localhost:* (any port on http://localhost or http://127.0.0.1)";
   console.log(
     `[insitue] companion ${COMPANION_VERSION} on 127.0.0.1:${port}\n` +
       `[insitue] scoped to ${root}\n` +
-      `[insitue] origins: ${opts.origin.join(", ")}\n` +
+      `[insitue] origins: ${originsLabel}\n` +
       `[insitue] session token written to .insitu/session.json\n` +
       `[insitue] tip: \`insitue connect\` in another terminal to pipe picks to your AI tool`,
   );

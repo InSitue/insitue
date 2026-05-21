@@ -1,6 +1,6 @@
 {
   "name": "@insitue/sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "InSitue capture SDK — drop one snippet into your deployed app; your users point at a bug, InSitue opens a verified pull request.",
   "license": "MIT",
   "type": "module",
@@ -12,11 +12,6 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
-    },
-    "./overlay": {
-      "types": "./dist/overlay.d.ts",
-      "import": "./dist/overlay.js",
-      "default": "./dist/overlay.js"
     },
     "./capture-only": {
       "types": "./dist/capture-only.d.ts",

@@ -21,7 +21,6 @@ const PKG_VERSION = JSON.parse(
 export default defineConfig({
   entry: [
     "src/index.ts",
-    "src/overlay.ts",
     "src/capture-only.ts",
     "src/babel.ts",
   ],

@@ -42,8 +42,18 @@ export interface CompanionOptions {
   transport?: AgentTransport;
   /** Allow ANTHROPIC_API_KEY to reach the agent (bills API, not Max). */
   allowApiKey?: boolean;
-  /** Allowed browser Origins (the running dev app). */
+  /** Additional allowed browser Origins on top of the localhost
+   *  wildcard (when enabled). Pass this for custom dev hostnames
+   *  (e.g. cloudflare quick tunnels) or when `allowLocalhost` is
+   *  off. The loopback bind + per-session token are the real auth
+   *  boundary — Origin is defense in depth. */
   origins: string[];
+  /** When true, allow any `http://localhost:*` or
+   *  `http://127.0.0.1:*` Origin without needing it in `origins`.
+   *  Default `false` for the `startCompanion()` API surface; the
+   *  `dev` CLI subcommand sets it `true` so users don't have to
+   *  pass `-o` for their dev server port. */
+  allowLocalhost?: boolean;
   /** Absolute project root the companion is scoped to. */
   root: string;
   /** Test seam — inject a deterministic `AgentProvider` for e2e tests
@@ -133,9 +143,16 @@ export function startCompanion(opts: CompanionOptions): Server {
     JSON.stringify({ token, port: opts.port, pid: process.pid }, null, 2),
   );
 
+  // Match any http(s)://localhost:* OR http(s)://127.0.0.1:* — used
+  // when `allowLocalhost` is on so users don't have to know their dev
+  // server port. The token + loopback bind are the actual auth.
+  const LOCALHOST_RE =
+    /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
   const originOk = (req: IncomingMessage): boolean => {
     const origin = req.headers.origin;
-    return typeof origin === "string" && opts.origins.includes(origin);
+    if (typeof origin !== "string") return false;
+    if (opts.allowLocalhost && LOCALHOST_RE.test(origin)) return true;
+    return opts.origins.includes(origin);
   };
 
   const http = createServer((req, res) => {
