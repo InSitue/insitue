@@ -441,18 +441,33 @@ function CaptureApp(props: AppProps) {
     const picking = phase === "picking";
     const offline = isDev && companionState !== "connected";
 
-    // Dev launcher: the cloud pill shape minus the label. A small
-    // circular surface container with just the dot inside — same
-    // style as cloud's "Report a problem" button, no text. The
-    // picking state pulses the inner dot.
+    // Dev launcher: same circular pill shape as cloud, minus the
+    // label. Two visual states the developer can read at a glance:
+    //
+    //   - Offline (companion not running) → muted: dark surface
+    //     container with a grey inner dot. "Nothing's listening."
+    //   - Connected (claude attached via /insitue:connect) → the
+    //     whole button fills with the cloud-accent purple. The
+    //     inner dot inverts to white. Brand-coloured "I'm live."
+    //
+    // Picking adds a soft pulse on the inner dot.
     if (isDev) {
-      const dotColor = offline ? "#9a9aa4" : CLOUD.accentSolid;
-      const innerShadow = offline ? "none" : `0 1px 4px ${CLOUD.accentRing}`;
+      const containerBg = offline ? C.surface : CLOUD.accentSolid;
+      const containerBorder = offline
+        ? `1px solid ${C.line}`
+        : "1px solid transparent";
+      const containerShadow = offline
+        ? C.shadow
+        : `0 0 0 4px rgba(91,91,240,.16),0 12px 30px rgba(60,55,200,.42)`;
+      const innerBg = offline ? "#9a9aa4" : "#ffffff";
+      const innerShadow = offline
+        ? "none"
+        : "0 1px 3px rgba(0,0,0,.20)";
       return h(
         "button",
         {
           onClick: picking ? undefined : () => void startPick(),
-          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${C.surface};border:1px solid ${C.line};border-radius:50%;box-shadow:${C.shadow}`,
+          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${containerBg};border:${containerBorder};border-radius:50%;box-shadow:${containerShadow};transition:background .18s ease,box-shadow .18s ease`,
           title: picking
             ? "Click an element · Esc to cancel"
             : offline
@@ -461,7 +476,7 @@ function CaptureApp(props: AppProps) {
         },
         [
           h("span", {
-            style: `width:11px;height:11px;border-radius:3px;background:${dotColor};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
+            style: `width:11px;height:11px;border-radius:3px;background:${innerBg};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
           }),
           picking
             ? h(
