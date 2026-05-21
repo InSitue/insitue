@@ -1249,6 +1249,14 @@ function App(props: { port: number }) {
 }
 
 export function mountInSitue(opts: InSitueOptions = {}): () => void {
+  // Dev overlay is the local agentic loop: dev is already looking
+  // at their page in their browser, agent needs DOM context not
+  // OS-compositor-perfect pixels. Layer-2 (`getDisplayMedia`) fires
+  // a tab-share permission prompt mid-flow — hostile UX here, and
+  // the captures the prompt unblocks aren't worth more to the agent
+  // than the simpler html-to-image render. Hard-disable it.
+  setCaptureSettings({ disableLayer2: true });
+
   const host = document.createElement("div");
   host.id = "insitu-root";
   host.setAttribute("data-insitu", "");

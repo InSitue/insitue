@@ -17,10 +17,20 @@ export interface CaptureSettings {
    *  Default false — most pages render perfectly via layer 1, so we
    *  only pay the permission prompt when needed. */
   alwaysPixelPerfect: boolean;
+  /** When true: never escalate to `getDisplayMedia` — even when
+   *  layer 1's quality check says the capture is imperfect. The
+   *  dev overlay (`mountInSitue`) sets this on mount: in a local
+   *  agentic loop the dev is already looking at the page, the
+   *  agent only needs "what did you point at" + DOM context, and
+   *  a tab-share permission prompt mid-flow is hostile UX. The
+   *  SaaS widget (`mountCaptureOnly`) leaves it false, because
+   *  end users reporting bugs need the screenshot to be perfect. */
+  disableLayer2: boolean;
 }
 
 const DEFAULT_SETTINGS: CaptureSettings = {
   alwaysPixelPerfect: false,
+  disableLayer2: false,
 };
 
 function storageKey(): string {

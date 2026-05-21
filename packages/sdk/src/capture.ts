@@ -903,7 +903,13 @@ export async function buildBundle(
             quality.hasVideo ||
             quality.hasCanvas));
 
-      if (imperfect || skipLayer1) {
+      // `disableLayer2` — dev overlay sets this on mount. Layer-2
+      // requires a tab-share permission prompt mid-flow, which is
+      // hostile for the local agent loop. The SaaS widget keeps
+      // layer-2 enabled (end-user bug reports need perfect pixels).
+      const allowLayer2 = !settings.disableLayer2;
+
+      if ((imperfect || skipLayer1) && allowLayer2) {
         // 4. Layer 2 — try `getDisplayMedia` for a pixel-perfect grab.
         const grab = await tryGrabViaDisplayMedia(
           cropRect,
