@@ -1,4 +1,13 @@
+import { readFileSync } from "node:fs";
 import { defineConfig } from "tsup";
+
+// Inline the package version so the SDK can self-identify at
+// runtime (capture widget footer, `SDK_VERSION` export). Reading
+// at build time keeps source-vs-published drift impossible: bump
+// package.json → next build picks it up automatically.
+const PKG_VERSION = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+).version as string;
 
 /**
  * The SDK ships browser-ready ESM. The overlay must run on its OWN
@@ -21,4 +30,7 @@ export default defineConfig({
   clean: true,
   external: ["react"],
   noExternal: ["preact", /^preact\//, "@insitue/capture-core", "html-to-image"],
+  define: {
+    __SDK_VERSION__: JSON.stringify(PKG_VERSION),
+  },
 });

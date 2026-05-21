@@ -353,9 +353,11 @@ function CaptureOnlyApp(props: AppProps) {
           ? h(
               "div",
               {
-                style: `font-size:12px;color:${C.faint};background:${C.surface2};border:1px solid ${C.line};border-radius:10px;padding:10px;margin-bottom:12px`,
+                style: `font-size:12px;color:${C.faint};background:${C.surface2};border:1px solid ${C.line};border-radius:10px;padding:10px;margin-bottom:12px;word-break:break-word`,
               },
-              "Screenshot unavailable — sending the rest.",
+              // Surface the actual reason inline — helps diagnose
+              // when a capture lands empty without expecting it.
+              `Screenshot unavailable — ${bundle.screenshotUnavailable}`,
             )
           : null,
       // Nudge: the screenshot is structurally OK but some content
@@ -447,7 +449,14 @@ function CaptureOnlyApp(props: AppProps) {
       {
         style: `display:flex;justify-content:space-between;padding:9px 16px;border-top:1px solid ${C.line};color:${C.faint};font-size:11px`,
       },
-      [h("span", {}, "🔒 Secrets scrubbed automatically"), h("span", {}, "InSitue")],
+      [
+        h("span", {}, "🔒 Secrets scrubbed automatically"),
+        h(
+          "span",
+          { title: `@insitue/sdk@${__SDK_VERSION__}` },
+          `InSitue · v${__SDK_VERSION__}`,
+        ),
+      ],
     ),
   ]);
 }

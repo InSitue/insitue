@@ -85,20 +85,41 @@ const IMAGE_PLACEHOLDER =
  *     paint-ready by the time html-to-image draws the SVG.
  *  Tracks failures so the post-rasterise quality check can decide
  *  whether to escalate to `getDisplayMedia`. */
-async function preResolveImages(): Promise<{
+async function preResolveImages(cropRect?: DOMRect): Promise<{
   restore: () => void;
   failedImages: Set<HTMLImageElement>;
 }> {
   const restorations: Array<() => void> = [];
   const failedImages = new Set<HTMLImageElement>();
 
+  // Only resolve images that intersect the crop region (or are
+  // close enough to spill into it). Resolving every image on the
+  // page is wasteful and — worse — one slow/blocked URL would
+  // stall the whole capture via Promise.all. Scoping cuts the
+  // worst case from "every <img>" to "<imgs> visible in the crop".
+  const PAD = 64;
   const images = Array.from(
     document.querySelectorAll<HTMLImageElement>("img"),
-  ).filter(
-    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
-  );
+  ).filter((img) => {
+    if (img.closest?.("#insitu-root, [data-insitu-layer]")) return false;
+    if (!cropRect) return true;
+    const r = img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return false;
+    return (
+      r.right >= cropRect.x - PAD &&
+      r.left <= cropRect.x + cropRect.width + PAD &&
+      r.bottom >= cropRect.y - PAD &&
+      r.top <= cropRect.y + cropRect.height + PAD
+    );
+  });
 
-  await Promise.all(
+  /** Per-image hard timeout. A single hung fetch (slow CDN, blocked
+   *  by an extension, dev-mode optimiser stuck) used to wedge the
+   *  whole capture via `Promise.all`. 3s is generous for cached
+   *  assets and short enough that the worst case is still snappy. */
+  const PER_IMAGE_TIMEOUT_MS = 3_000;
+
+  await Promise.allSettled(
     images.map(async (img) => {
       const srcToFetch = img.currentSrc || img.src;
       if (
@@ -108,10 +129,16 @@ async function preResolveImages(): Promise<{
       ) {
         return;
       }
+      // AbortController gives us a hard cap on fetch latency. Also
+      // covers the (rare) case where the connection completes but
+      // `blob()` or `FileReader` hangs.
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), PER_IMAGE_TIMEOUT_MS);
       try {
-        // `force-cache` lets the browser serve from its image cache
-        // if it already loaded the asset — usually zero network.
-        const res = await fetch(srcToFetch, { cache: "force-cache" });
+        const res = await fetch(srcToFetch, {
+          cache: "force-cache",
+          signal: ac.signal,
+        });
         if (!res.ok) {
           failedImages.add(img);
           return;
@@ -131,18 +158,17 @@ async function preResolveImages(): Promise<{
           if (origSrcset != null) img.setAttribute("srcset", origSrcset);
           else img.removeAttribute("srcset");
         });
-        // Clear `srcset` first — otherwise the browser prefers it
-        // over our new `src` and we just painted the same thing.
         img.removeAttribute("srcset");
         img.src = dataUrl;
         try {
           await img.decode();
         } catch {
-          // Decode races aren't fatal — html-to-image clones the
-          // already-applied src either way.
+          /* decode races aren't fatal */
         }
       } catch {
         failedImages.add(img);
+      } finally {
+        clearTimeout(timer);
       }
     }),
   );
@@ -155,15 +181,22 @@ async function preResolveImages(): Promise<{
   };
 }
 
+/** An element we can screenshot — has rect + inline style. Both
+ *  HTMLElement and SVGElement (incl. SVGGElement, the "g" group)
+ *  qualify; widening from HTMLElement-only fixes the silent-skip
+ *  bug where picking an SVG node produced a bundle with neither
+ *  `screenshot` nor `screenshotUnavailable` set. */
+type RasterisableElement = HTMLElement | SVGElement;
+
 /** Walk up from the picked element to find a meaningfully-sized
  *  ancestor to screenshot — so the thumbnail has enough visual
  *  context for a human reviewer to recognise the bug. */
-function findContextAncestor(el: HTMLElement): HTMLElement {
+function findContextAncestor(el: RasterisableElement): RasterisableElement {
   const minW = 420;
   const minH = 140;
   const maxW = window.innerWidth * 1.2;
   const maxH = window.innerHeight * 1.2;
-  let cur: HTMLElement = el;
+  let cur: RasterisableElement = el;
   for (let depth = 0; depth < 8; depth++) {
     const r = cur.getBoundingClientRect();
     if (r.width >= minW && r.height >= minH) return cur;
@@ -171,7 +204,7 @@ function findContextAncestor(el: HTMLElement): HTMLElement {
     if (!parent) return cur;
     const pr = parent.getBoundingClientRect();
     if (pr.width > maxW || pr.height > maxH) return cur;
-    cur = parent;
+    cur = parent as RasterisableElement;
   }
   return cur;
 }
@@ -203,7 +236,8 @@ async function renderViewportCrop(
   // own fetch pipeline misses next/image srcset, decode races, and
   // proxy-URL quirks. Doing it here means by the time toCanvas
   // clones the DOM, every <img> is already a paint-ready data URL.
-  const { restore: restoreImages, failedImages } = await preResolveImages();
+  const { restore: restoreImages, failedImages } =
+    await preResolveImages(cropRect);
   try {
     const fullCanvas = await toCanvas(document.documentElement, {
       pixelRatio,
@@ -625,7 +659,9 @@ export async function buildBundle(
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
 
-  if (el instanceof HTMLElement) {
+  // SVGElement gets the same path — the silent-skip on SVG picks
+  // (e.g. an icon's <g>) was the "I see nothing" bug 2026-05-21.
+  if (el instanceof HTMLElement || el instanceof SVGElement) {
     // 1. Compute crop region around a context-sized ancestor.
     const context = findContextAncestor(el);
     const cr = context.getBoundingClientRect();
@@ -755,7 +791,22 @@ export async function buildBundle(
     computedStyles: el ? curateComputedStyles(el) : {},
     tailwindClasses: el ? extractTailwindClasses(el) : [],
     ...(screenshot ? { screenshot } : {}),
-    ...(screenshotUnavailable ? { screenshotUnavailable } : {}),
+    // "Never silent" — if neither screenshot nor screenshotUnavailable
+    // got set above (an unexpected fallthrough), surface that fact
+    // so the widget never renders a blank where a result should be.
+    // The structured diagnostic below tells future-me exactly which
+    // branch ran, surfaced as `__insitu_capture__.bundle` in dev.
+    ...(screenshotUnavailable
+      ? { screenshotUnavailable }
+      : !screenshot
+        ? {
+            screenshotUnavailable: el
+              ? `screenshot path didn't set a result (el=${el.tagName.toLowerCase()}; rasterisable=${
+                  el instanceof HTMLElement || el instanceof SVGElement
+                })`
+              : "no element selected",
+          }
+        : {}),
     viewport: {
       w: window.innerWidth,
       h: window.innerHeight,
