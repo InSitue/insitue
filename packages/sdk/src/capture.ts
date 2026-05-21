@@ -54,19 +54,106 @@ function crossOrigin(url: string | null | undefined): boolean {
 }
 
 /** Visually-honest "image unavailable" marker used as html-to-image's
- *  `imagePlaceholder`. A 32×32 SVG with diagonal stripes on a muted
- *  background — the browser stretches it to the failing img's
- *  intrinsic size, so the reviewer sees a recognisable "missing
- *  asset" block instead of a void. Inline data URL keeps the SDK
- *  bundle self-contained. */
+ *  `imagePlaceholder` AND as the swap-in for our own pre-resolve
+ *  failures. Base64 (not `;utf8`) for cross-browser reliability —
+ *  the `;utf8` shorthand isn't part of the data-URL spec and gets
+ *  rejected inside `<foreignObject>` rendering on some browsers. */
 const IMAGE_PLACEHOLDER =
-  "data:image/svg+xml;utf8," +
-  encodeURIComponent(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">` +
-      `<rect width="32" height="32" fill="#e8e8e8"/>` +
-      `<path d="M0 0 L32 32 M32 0 L0 32" stroke="#b0b0b0" stroke-width="1.5"/>` +
-      `</svg>`,
+  "data:image/svg+xml;base64," +
+  (typeof btoa !== "undefined"
+    ? btoa(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">' +
+          '<rect width="32" height="32" fill="#e8e8e8"/>' +
+          '<path d="M0 0 L32 32 M32 0 L0 32" stroke="#b0b0b0" stroke-width="1.5"/>' +
+          "</svg>",
+      )
+    : "");
+
+/** Pre-resolve every `<img>` in the document to a data URL by
+ *  fetching its `currentSrc` ourselves, base64-encoding it, and
+ *  swapping it into the element BEFORE html-to-image clones it.
+ *  Sidesteps a whole class of html-to-image quirks:
+ *   - next/image / `srcset` confusion: html-to-image reads `.src`
+ *     (the fallback URL), not `.currentSrc` (what the browser
+ *     actually painted). The wrong URL fetches a different-sized
+ *     asset, or worse, fails and the image goes blank.
+ *   - same-origin proxy URLs (Next.js `/_next/image?url=...`)
+ *     succeed under our `fetch()` but fail opaquely inside
+ *     html-to-image's embed pipeline (race between `src=` and the
+ *     SVG `foreignObject` serialisation).
+ *   - decode timing: pre-decoding here means the image is
+ *     paint-ready by the time html-to-image draws the SVG.
+ *  Tracks failures so the post-rasterise quality check can decide
+ *  whether to escalate to `getDisplayMedia`. */
+async function preResolveImages(): Promise<{
+  restore: () => void;
+  failedImages: Set<HTMLImageElement>;
+}> {
+  const restorations: Array<() => void> = [];
+  const failedImages = new Set<HTMLImageElement>();
+
+  const images = Array.from(
+    document.querySelectorAll<HTMLImageElement>("img"),
+  ).filter(
+    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
   );
+
+  await Promise.all(
+    images.map(async (img) => {
+      const srcToFetch = img.currentSrc || img.src;
+      if (
+        !srcToFetch ||
+        srcToFetch.startsWith("data:") ||
+        srcToFetch.startsWith("blob:")
+      ) {
+        return;
+      }
+      try {
+        // `force-cache` lets the browser serve from its image cache
+        // if it already loaded the asset — usually zero network.
+        const res = await fetch(srcToFetch, { cache: "force-cache" });
+        if (!res.ok) {
+          failedImages.add(img);
+          return;
+        }
+        const blob = await res.blob();
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        const origSrc = img.getAttribute("src");
+        const origSrcset = img.getAttribute("srcset");
+        restorations.push(() => {
+          if (origSrc != null) img.setAttribute("src", origSrc);
+          else img.removeAttribute("src");
+          if (origSrcset != null) img.setAttribute("srcset", origSrcset);
+          else img.removeAttribute("srcset");
+        });
+        // Clear `srcset` first — otherwise the browser prefers it
+        // over our new `src` and we just painted the same thing.
+        img.removeAttribute("srcset");
+        img.src = dataUrl;
+        try {
+          await img.decode();
+        } catch {
+          // Decode races aren't fatal — html-to-image clones the
+          // already-applied src either way.
+        }
+      } catch {
+        failedImages.add(img);
+      }
+    }),
+  );
+
+  return {
+    restore: () => {
+      for (const r of restorations) r();
+    },
+    failedImages,
+  };
+}
 
 /** Walk up from the picked element to find a meaningfully-sized
  *  ancestor to screenshot — so the thumbnail has enough visual
@@ -102,7 +189,7 @@ function findContextAncestor(el: HTMLElement): HTMLElement {
 async function renderViewportCrop(
   cropRect: DOMRect,
   pixelRatio: number,
-): Promise<string | null> {
+): Promise<{ dataUrl: string | null; failedImages: Set<HTMLImageElement> }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
   const backgroundColor =
@@ -112,49 +199,53 @@ async function renderViewportCrop(
         ? htmlBg
         : "#ffffff";
 
-  const fullCanvas = await toCanvas(document.documentElement, {
-    pixelRatio,
-    cacheBust: true,
-    backgroundColor,
-    imagePlaceholder: IMAGE_PLACEHOLDER,
-    // Only filter out our own overlay layers — leave cross-origin
-    // <img>s in place so embedImages can fetch+inline them.
-    filter: (n) =>
-      !(
-        n instanceof Element &&
-        n.closest?.("#insitu-root, [data-insitu-layer]")
-      ),
-  });
+  // Pre-resolve all <img>s to data URLs ourselves — html-to-image's
+  // own fetch pipeline misses next/image srcset, decode races, and
+  // proxy-URL quirks. Doing it here means by the time toCanvas
+  // clones the DOM, every <img> is already a paint-ready data URL.
+  const { restore: restoreImages, failedImages } = await preResolveImages();
+  try {
+    const fullCanvas = await toCanvas(document.documentElement, {
+      pixelRatio,
+      // cacheBust off — we've already swapped srcs to data URLs.
+      cacheBust: false,
+      backgroundColor,
+      imagePlaceholder: IMAGE_PLACEHOLDER,
+      // Strip only our own overlay layers.
+      filter: (n) =>
+        !(
+          n instanceof Element &&
+          n.closest?.("#insitu-root, [data-insitu-layer]")
+        ),
+    });
 
-  // cropRect is viewport-relative; the full-document render is
-  // document-relative — shift by scroll offset to line them up.
-  const sx = window.scrollX;
-  const sy = window.scrollY;
-  const out = document.createElement("canvas");
-  out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
-  out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
-  const ctx = out.getContext("2d");
-  if (!ctx) return null;
-  ctx.drawImage(
-    fullCanvas,
-    Math.round((cropRect.x + sx) * pixelRatio),
-    Math.round((cropRect.y + sy) * pixelRatio),
-    Math.round(cropRect.width * pixelRatio),
-    Math.round(cropRect.height * pixelRatio),
-    0,
-    0,
-    out.width,
-    out.height,
-  );
-
-  // Defensive: sample the cropped canvas. If every sampled pixel is
-  // identical, html-to-image probably emitted a silent-blank-PNG
-  // (the failure mode the original `crossOriginMediaReason` bailout
-  // was trying to catch). Treat as a failed rasterise.
-  if (looksBlankUniform(ctx, out.width, out.height)) {
-    return null;
+    const sx = window.scrollX;
+    const sy = window.scrollY;
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
+    out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
+    const ctx = out.getContext("2d");
+    if (!ctx) return { dataUrl: null, failedImages };
+    ctx.drawImage(
+      fullCanvas,
+      Math.round((cropRect.x + sx) * pixelRatio),
+      Math.round((cropRect.y + sy) * pixelRatio),
+      Math.round(cropRect.width * pixelRatio),
+      Math.round(cropRect.height * pixelRatio),
+      0,
+      0,
+      out.width,
+      out.height,
+    );
+    if (looksBlankUniform(ctx, out.width, out.height)) {
+      return { dataUrl: null, failedImages };
+    }
+    return { dataUrl: out.toDataURL("image/png"), failedImages };
+  } finally {
+    // Restore original srcs even if rasterise threw — the page must
+    // be visually identical to before the capture.
+    restoreImages();
   }
-  return out.toDataURL("image/png");
 }
 
 /** Cheap blank-detection — sample 16 evenly spaced pixels; if they're
@@ -200,9 +291,15 @@ interface QualityAssessment {
 }
 
 /** Walk the elements geometrically inside `cropRect` and decide
- *  whether the layer-1 screenshot is structurally perfect. Anything
- *  flagged here triggers the layer-2 `getDisplayMedia` escalation. */
-function assessCaptureQuality(cropRect: DOMRect): QualityAssessment {
+ *  whether the layer-1 screenshot is structurally perfect. The
+ *  `failedImages` set comes from `preResolveImages` — it's the
+ *  ground truth of which `<img>` elements we couldn't fetch+inline
+ *  (typically: cross-origin without CORS). Anything flagged here
+ *  triggers the layer-2 `getDisplayMedia` escalation. */
+function assessCaptureQuality(
+  cropRect: DOMRect,
+  failedImages: Set<HTMLImageElement>,
+): QualityAssessment {
   const out: QualityAssessment = {
     unembeddableImages: 0,
     hasVideo: false,
@@ -217,7 +314,6 @@ function assessCaptureQuality(cropRect: DOMRect): QualityAssessment {
       continue;
     }
     const r = el.getBoundingClientRect();
-    // "Inside crop" = element's box overlaps the crop rect.
     const overlaps =
       r.right >= cropRect.x &&
       r.left <= cropRect.x + cropRect.width &&
@@ -225,24 +321,10 @@ function assessCaptureQuality(cropRect: DOMRect): QualityAssessment {
       r.top <= cropRect.y + cropRect.height;
     if (!overlaps) continue;
     if (el instanceof HTMLImageElement) {
-      const src = el.currentSrc || el.src;
-      if (!src) continue;
-      // `complete && naturalWidth > 0` means the browser successfully
-      // loaded it — html-to-image's CORS fetch may still fail, but
-      // it'll only fail when the load succeeded WITHOUT CORS (the
-      // original load was a no-cors GET; the fetch-embed needs CORS
-      // headers in the response). We flag both failure modes:
-      //  - browser couldn't load it at all (broken img)
-      //  - browser loaded it but origin doesn't serve CORS (will
-      //    fall back to IMAGE_PLACEHOLDER in the rasterise)
-      const browserLoaded = el.complete && el.naturalWidth > 0;
-      const corsSafe = !crossOrigin(src) || el.crossOrigin != null;
-      if (!browserLoaded || !corsSafe) {
-        out.unembeddableImages++;
-      }
+      if (failedImages.has(el)) out.unembeddableImages++;
     } else if (el instanceof HTMLVideoElement) {
-      // Videos can be same-origin but we still can't get the current
-      // frame into html-to-image — escalate.
+      // Videos can be same-origin but we still can't extract the
+      // current frame via html-to-image — escalate.
       if (r.width > 0 && r.height > 0) out.hasVideo = true;
     } else if (el instanceof HTMLCanvasElement) {
       if (r.width > 0 && r.height > 0) out.hasCanvas = true;
@@ -575,11 +657,9 @@ export async function buildBundle(
       let quality: QualityAssessment | null = null;
 
       if (!skipLayer1) {
-        layer1Result = await renderViewportCrop(
-          cropRect,
-          Math.min(dpr, 1.5),
-        );
-        quality = assessCaptureQuality(cropRect);
+        const r = await renderViewportCrop(cropRect, Math.min(dpr, 1.5));
+        layer1Result = r.dataUrl;
+        quality = assessCaptureQuality(cropRect, r.failedImages);
       }
 
       const imperfect =
