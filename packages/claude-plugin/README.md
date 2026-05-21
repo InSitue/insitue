@@ -20,9 +20,27 @@ there's no extra config — start `insitue dev`, start `claude`, run
 
 ## Install
 
-```bash
-claude plugin install @insitue/claude-plugin
+Inside an interactive `claude` session:
+
 ```
+/plugin marketplace add InSitue/insitue
+/plugin install insitue@insitue-plugins
+```
+
+The marketplace lives at the InSitue monorepo
+(`github.com/InSitue/insitue`). The plugin is cached locally after
+install; refresh with `/plugin marketplace update insitue-plugins`.
+
+### Local development
+
+```bash
+claude --plugin-dir /absolute/path/to/packages/claude-plugin
+```
+
+(npm is also wired up — `npx @insitue/claude-plugin` runs the MCP
+server standalone for Claude Desktop / other clients that take an
+MCP server config directly. The `/plugin install` flow above is the
+canonical path for Claude Code.)
 
 ## Use
 
