@@ -1,8 +1,10 @@
 {
   "name": "@insitue/companion",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "Local companion process: loopback WS, project sandbox, agent edit gateway.",
   "license": "MIT",
   "bin": {

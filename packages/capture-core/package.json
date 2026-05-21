@@ -1,8 +1,10 @@
 {
   "name": "@insitue/capture-core",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "description": "The seam: pure, transport/agent/fs-free capture model shared by every InSitue vehicle.",
   "license": "MIT",
   "main": "./dist/index.js",
