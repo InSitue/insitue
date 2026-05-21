@@ -55,11 +55,17 @@ function toLoc(workspaceCwdRelative: DebugSource): SourceLoc | null {
   };
 }
 
-/** Parse a build-injected `data-insitue-source="relpath:line:col"`. */
+/** Parse a build-injected source attribute. Reads `data-insitue-source`
+ *  (current) first, falling back to the legacy `data-insitu-source`
+ *  (no-'e') name so apps with cached pre-rename build output still
+ *  resolve. The fallback is transitional — remove once `.next/cache`
+ *  invalidation for SWC-plugin version changes is universal. */
 function fromAttribute(el: Element): SourceLoc | null {
   let cur: Element | null = el;
   for (let i = 0; cur && i < 8; i++, cur = cur.parentElement) {
-    const raw = cur.getAttribute("data-insitue-source");
+    const raw =
+      cur.getAttribute("data-insitue-source") ??
+      cur.getAttribute("data-insitu-source");
     if (raw) {
       const m = /^(.*):(\d+):(\d+)$/.exec(raw);
       if (m) return { file: m[1]!, line: Number(m[2]), column: Number(m[3]) };
