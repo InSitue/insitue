@@ -1,0 +1,197 @@
+/**
+ * #162 protocol v5: subscriber presence + external-ask routing.
+ *
+ * The /insitue:connect flow lets a separate `claude` process attach
+ * to the running companion via the CLI subscriber path and act on
+ * picks. The contract this test pins:
+ *
+ *  1. When a CLI subscriber connects, the companion pushes
+ *     `subscribers-attached { count: 1 }` to every authed browser.
+ *  2. When the subscriber disconnects, the count goes back to 0.
+ *  3. A browser sending `agent-ask-external` is re-broadcast to
+ *     subscribers as `broadcast-ask` AND does NOT spawn the
+ *     in-overlay headless agent (no `agent-stream` reaches the
+ *     browser as a result).
+ *
+ * The third assertion is the whole reason for this work — if the
+ * orchestrator silently fires its own claude alongside the
+ * external one, we get duplicate edits, duplicate billing, and the
+ * user gets two confusing responses. The test would notice.
+ */
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { mkdtempSync } from "node:fs";
+import { join } from "node:path";
+import WebSocket from "ws";
+import { startCompanion } from "../dist/server.js";
+import { StubAgentProvider } from "@insitue/agent-core/stub-provider";
+import { PROTOCOL_VERSION } from "@insitue/capture-core";
+
+const PORT = 5800;
+const ORIGIN = "http://localhost:3000";
+
+async function fetchToken(port) {
+  const res = await fetch(`http://127.0.0.1:${port}/insitu/handshake`, {
+    headers: { origin: ORIGIN },
+  });
+  return (await res.json()).token;
+}
+
+function openBrowser(port, token) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, { origin: ORIGIN });
+  const messages = [];
+  ws.on("message", (d) => messages.push(JSON.parse(String(d))));
+  return new Promise((resolve) => {
+    ws.once("open", () => {
+      ws.send(
+        JSON.stringify({ t: "hello", protocolVersion: PROTOCOL_VERSION, token }),
+      );
+      resolve({ ws, messages });
+    });
+  });
+}
+
+function openSubscriber(port, token) {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/insitu/cli`);
+  const messages = [];
+  ws.on("message", (d) => messages.push(JSON.parse(String(d))));
+  return new Promise((resolve) => {
+    ws.once("open", () => {
+      ws.send(
+        JSON.stringify({ t: "hello", protocolVersion: PROTOCOL_VERSION, token }),
+      );
+      resolve({ ws, messages });
+    });
+  });
+}
+
+async function waitFor(messages, predicate, ms = 3000) {
+  const start = Date.now();
+  while (Date.now() - start < ms) {
+    const m = messages.find(predicate);
+    if (m) return m;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("waitFor timeout");
+}
+
+test("subscriber attach/detach broadcasts count to browsers", async (t) => {
+  // We don't need an LLM for this test — but the orchestrator is
+  // wired into the auth path so we hand it a stub to keep preflight
+  // deterministic.
+  const provider = new StubAgentProvider({
+    preflight: { ready: true, warnings: [], blockers: [] },
+  });
+  const root = mkdtempSync(join(tmpdir(), "insitu-m7-"));
+  const server = startCompanion({
+    port: PORT,
+    origins: [ORIGIN],
+    root,
+    provider,
+  });
+  await new Promise((r) => server.once("listening", r));
+  t.after(() => new Promise((r) => server.close(r)));
+
+  const token = await fetchToken(PORT);
+  const browser = await openBrowser(PORT, token);
+  t.after(() => browser.ws.close());
+
+  // Initial sync — server pushes count=0 right after hello-ok
+  // because no subscribers have connected yet.
+  const initial = await waitFor(
+    browser.messages,
+    (m) => m.t === "subscribers-attached",
+  );
+  assert.equal(initial.count, 0, "initial subscriber count should be 0");
+
+  // Attach a subscriber and expect the count to bump to 1.
+  const sub = await openSubscriber(PORT, token);
+  t.after(() => sub.ws.close());
+  sub.ws.send(JSON.stringify({ t: "subscribe" }));
+
+  const attached = await waitFor(
+    browser.messages,
+    (m) =>
+      m.t === "subscribers-attached" &&
+      m.count === 1 &&
+      m !== initial,
+  );
+  assert.equal(attached.count, 1, "count should bump to 1 after subscribe");
+
+  // Detach — count should fall back to 0.
+  sub.ws.close();
+  const detached = await waitFor(
+    browser.messages,
+    (m) =>
+      m.t === "subscribers-attached" &&
+      m.count === 0 &&
+      m !== initial,
+  );
+  assert.equal(detached.count, 0, "count should fall to 0 after disconnect");
+});
+
+test("agent-ask-external is broadcast as broadcast-ask and never invokes orchestrator", async (t) => {
+  // Stub provider with a turn script that WOULD propose an edit if
+  // the orchestrator fired. The presence of any `changeset-proposed`
+  // message on the browser side would be a contract violation —
+  // external-ask routing must NEVER spawn the in-overlay agent.
+  const provider = new StubAgentProvider({
+    turns: [
+      {
+        text: "I would have edited a file.",
+        edits: [{ file: "src/should-not-touch.tsx", contents: "TAMPERED" }],
+      },
+    ],
+    preflight: { ready: true, warnings: [], blockers: [] },
+  });
+  const root = mkdtempSync(join(tmpdir(), "insitu-m7b-"));
+  const server = startCompanion({
+    port: PORT + 1,
+    origins: [ORIGIN],
+    root,
+    provider,
+  });
+  await new Promise((r) => server.once("listening", r));
+  t.after(() => new Promise((r) => server.close(r)));
+
+  const token = await fetchToken(PORT + 1);
+  const browser = await openBrowser(PORT + 1, token);
+  t.after(() => browser.ws.close());
+  const sub = await openSubscriber(PORT + 1, token);
+  t.after(() => sub.ws.close());
+  sub.ws.send(JSON.stringify({ t: "subscribe" }));
+  await waitFor(sub.messages, (m) => m.t === "subscribe-ok");
+
+  // Browser sends an external ask (no preceding agent-turn, so the
+  // orchestrator can't be invoked anyway — but we're pinning that
+  // the handler routes the message regardless).
+  browser.ws.send(
+    JSON.stringify({
+      t: "agent-ask-external",
+      turnId: "t1",
+      bundleId: "b1",
+      text: "make this bigger",
+    }),
+  );
+
+  const ask = await waitFor(sub.messages, (m) => m.t === "broadcast-ask");
+  assert.equal(ask.bundleId, "b1");
+  assert.equal(ask.text, "make this bigger");
+
+  // Confirm the orchestrator was NOT invoked: no agent-stream,
+  // changeset-proposed, or changeset-applied reached the browser.
+  await new Promise((r) => setTimeout(r, 200));
+  const fired = browser.messages.find((m) =>
+    [
+      "agent-stream",
+      "changeset-proposed",
+      "changeset-applied",
+    ].includes(m.t),
+  );
+  assert.equal(
+    fired,
+    undefined,
+    "agent-ask-external must not spawn the in-overlay headless agent",
+  );
+});

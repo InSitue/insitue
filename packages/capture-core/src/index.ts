@@ -19,7 +19,7 @@ export const CAPTURE_SCHEMA_VERSION = 3 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
  *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3).
  *  v4: agent-activity (M6 — live "what it's doing" feedback). */
-export const PROTOCOL_VERSION = 4 as const;
+export const PROTOCOL_VERSION = 5 as const;
 
 export interface SourceLoc {
   /** Repo-relative POSIX path, e.g. `components/MainBar.tsx`. */
@@ -365,12 +365,53 @@ export interface AgentSessionCommittedMsg {
   files: string[];
 }
 
+/* ── #162 protocol v5: external-agent ask routing ──
+ * When a CLI/MCP subscriber is attached (e.g. claude with
+ * `/insitue:connect` open), the overlay's Send button routes the
+ * user's typed intent to that external claude INSTEAD of spawning
+ * the in-overlay headless agent. Three message types make this
+ * work; they're additive — protocol v4 servers/clients keep
+ * functioning, just without the external-routing affordance. */
+
+/** Browser → companion: user clicked Send in the overlay's ASK
+ *  textbox AND a CLI/MCP subscriber is attached. Companion
+ *  re-broadcasts as `broadcast-ask` to subscribers and does NOT
+ *  spawn its own headless agent. */
+export interface AgentAskExternalMsg {
+  t: "agent-ask-external";
+  turnId: string;
+  bundleId: string;
+  text: string;
+}
+
+/** Companion → CLI/MCP subscribers: a browser just sent an external
+ *  ask. Joined with the matching `broadcast-capture` by `bundleId`
+ *  in the subscriber (the MCP bridge holds picks for a few seconds
+ *  so the ask catches up). */
+export interface BroadcastAskMsg {
+  t: "broadcast-ask";
+  bundleId: string;
+  text: string;
+  at: string;
+}
+
+/** Companion → browser: how many CLI/MCP subscribers are currently
+ *  attached. Pushed on every connect + disconnect so the overlay
+ *  can show/hide the "→ claude in terminal" badge and route Send
+ *  accordingly. count=0 means "no external agent attached — Send
+ *  goes to the in-overlay headless agent (today's behavior)". */
+export interface SubscribersAttachedMsg {
+  t: "subscribers-attached";
+  count: number;
+}
+
 /** Client→server messages. */
 export type ClientMessage =
   | HelloMsg
   | PingMsg
   | CaptureSubmitMsg
   | AgentTurnMsg
+  | AgentAskExternalMsg
   | AgentDecisionMsg
   | AgentCancelMsg
   | AgentUndoMsg
@@ -388,7 +429,8 @@ export type ServerMessage =
   | ChangesetAppliedMsg
   | AgentUndoneMsg
   | AgentSessionUndoneMsg
-  | AgentSessionCommittedMsg;
+  | AgentSessionCommittedMsg
+  | SubscribersAttachedMsg;
 
 export * from "./dom.js";
 export * from "./react-source.js";

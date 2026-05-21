@@ -144,20 +144,75 @@ class PickBuffer {
     if (this.picks.length > MAX_BUFFERED_PICKS) {
       this.picks.shift();
     }
+    this.flushWaiters();
+  }
+
+  /** #162: merge a `broadcast-ask` into the matching `pick.userNote`.
+   *  Two ordering modes the user might create:
+   *   1. Pick first (auto on click), THEN type + Send → ask lands
+   *      AFTER pick. If the pick is still queued (not yet delivered
+   *      to claude), update it in place. If already delivered, the
+   *      ask arrives as a standalone update — surfaced as a synthetic
+   *      pick whose `userNote` is set so claude treats it as new
+   *      input on the most-recent target.
+   *   2. Ask before pick is impossible (the panel needs a pick first
+   *      to enable the ASK textbox), so we don't handle that. */
+  attachAsk(bundleId: string, text: string): void {
+    const idx = this.picks.findIndex((p) => p.id === bundleId);
+    if (idx >= 0) {
+      this.picks[idx] = { ...this.picks[idx]!, userNote: text };
+      this.flushWaiters();
+      return;
+    }
+    if (this.lastDelivered === bundleId && this.lastDeliveredPick) {
+      // Replay the previously-delivered pick with the user's note
+      // attached, so the SAME bundleId reaches claude again with
+      // the new instruction. Claude can decide whether this is a
+      // refinement or a fresh ask.
+      this.picks.push({
+        ...this.lastDeliveredPick,
+        userNote: text,
+        at: new Date().toISOString(),
+      });
+      this.flushWaiters();
+      return;
+    }
+    // Pick is unknown — buffer the ask briefly in case the pick
+    // arrives in the next ~2s (network reorder). Drop afterward.
+    const orphan: PickEvent = {
+      id: bundleId,
+      at: new Date().toISOString(),
+      source: null,
+      confidence: "n/a",
+      target: "[insitue] note without pick",
+      selector: null,
+      userNote: text,
+      url: null,
+      componentStack: [],
+    };
+    this.picks.push(orphan);
+    this.flushWaiters();
+  }
+
+  private flushWaiters(): void {
     while (this.waiters.length && this.picks.length) {
       const w = this.waiters.shift()!;
       clearTimeout(w.timer);
       const next = this.picks.shift()!;
       this.lastDelivered = next.id;
+      this.lastDeliveredPick = next;
       w.resolve(next);
     }
   }
+
+  private lastDeliveredPick: PickEvent | null = null;
 
   /** Resolve with the next pick to land OR null on timeout. */
   next(timeoutMs: number): Promise<PickEvent | null> {
     if (this.picks.length) {
       const next = this.picks.shift()!;
       this.lastDelivered = next.id;
+      this.lastDeliveredPick = next;
       return Promise.resolve(next);
     }
     return new Promise((resolve) => {
@@ -208,7 +263,9 @@ function connectToCompanion(session: { token: string; port: number }) {
         t: "hello",
         // Pin to the published companion protocol version — bumped
         // when the wire format breaks, NOT for every release.
-        protocolVersion: 4,
+        // v5 added broadcast-ask + subscribers-attached + agent-
+        // ask-external for the external-claude routing flow.
+        protocolVersion: 5,
         token: session.token,
       }),
     );
@@ -226,6 +283,17 @@ function connectToCompanion(session: { token: string; port: number }) {
       (m as { t?: unknown }).t === "hello-ok"
     ) {
       ws.send(JSON.stringify({ t: "subscribe" }));
+      return;
+    }
+    if (
+      m &&
+      typeof m === "object" &&
+      (m as { t?: unknown }).t === "broadcast-ask"
+    ) {
+      const ask = m as { bundleId?: string; text?: string };
+      if (typeof ask.bundleId === "string" && typeof ask.text === "string") {
+        buffer.attachAsk(ask.bundleId, ask.text);
+      }
       return;
     }
     if (

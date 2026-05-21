@@ -1,6 +1,6 @@
 {
   "name": "insitue",
-  "version": "0.0.3",
+  "version": "0.1.0",
   "description": "Drive a Claude Code session from the InSitue browser overlay. Pick an element in your app, claude reads the file and proposes the edit.",
   "mcpServers": {
     "insitue": {

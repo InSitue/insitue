@@ -37,6 +37,12 @@ export interface ClientEvents {
   onUndone?(turnId: string, restored: string[]): void;
   onSessionUndone?(restored: string[]): void;
   onSessionCommitted?(commit: string, files: string[]): void;
+  /** #162: fired whenever a CLI/MCP subscriber attaches or detaches
+   *  from the companion. The overlay uses this to show the
+   *  "→ claude in terminal" badge and route ASK Send to the
+   *  external agent path. `count = 0` means no external claude is
+   *  attached — Send falls back to the in-overlay headless agent. */
+  onSubscribersAttached?(count: number): void;
 }
 
 export class CompanionClient {
@@ -107,6 +113,8 @@ export class CompanionClient {
           this.events.onSessionCommitted?.(msg.commit, msg.files);
         } else if (msg.t === "capture-resolved") {
           this.events.onResolved?.(msg.id, msg.resolved, msg.note);
+        } else if (msg.t === "subscribers-attached") {
+          this.events.onSubscribersAttached?.(msg.count);
         } else if (msg.t === "error") {
           this.events.onState("error", `${msg.code}: ${msg.message}`);
           done();
@@ -150,6 +158,21 @@ export class CompanionClient {
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     ws.send(
       JSON.stringify({ t: "agent-turn", turnId, bundleId, userMessage }),
+    );
+    return true;
+  }
+
+  /** #162: route the user's typed intent to a CLI/MCP subscriber
+   *  (e.g. claude with `/insitue:connect` open) instead of the
+   *  in-overlay headless agent. No reply arrives back through this
+   *  client — the external claude shows its work in its own
+   *  terminal. Callers should switch the panel UI to a "Sent to
+   *  claude in your terminal" affordance after this returns. */
+  sendAsk(turnId: string, bundleId: string, text: string): boolean {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(
+      JSON.stringify({ t: "agent-ask-external", turnId, bundleId, text }),
     );
     return true;
   }

@@ -180,6 +180,12 @@ function App(props: { port: number }) {
   const [commitMsg, setCommitMsg] = useState("");
   const [sessionNote, setSessionNote] = useState("");
   const [lastSel, setLastSel] = useState<SelectionInput | null>(null);
+  // #162: how many CLI/MCP subscribers (e.g. claude via
+  // `/insitue:connect`) are attached. When > 0, Send routes to the
+  // external claude via `client.sendAsk` instead of spawning the
+  // in-overlay headless agent. Companion pushes this on every
+  // subscriber connect/disconnect.
+  const [externalCount, setExternalCount] = useState(0);
   const [activeTurn, setActiveTurn] = useState<{
     turnId: string;
     prompt: string;
@@ -366,6 +372,10 @@ function App(props: { port: number }) {
         );
         setSessionNote(`committed as ${commit} (local only — not pushed)`);
       },
+      // #162: companion pushes this on every CLI/MCP subscriber
+      // connect/disconnect. Drives the "→ claude in terminal"
+      // badge and the Send-routing branch.
+      onSubscribersAttached: (count) => setExternalCount(count),
     });
     setClient(c);
     void c.connect();
@@ -490,9 +500,22 @@ function App(props: { port: number }) {
     }
     if (!bundle) return;
     const turnId = bundle.id; // events key by bundle id
-    setActiveTurn({ turnId, prompt: text, sel: lastSel });
     setMessages((ms) => [...ms, { role: "user", text }]);
     setChatInput("");
+    // #162: if any CLI/MCP subscriber is attached (e.g. claude with
+    // `/insitue:connect` open), route the ask there. The external
+    // claude is the source of truth for this turn — no in-overlay
+    // headless agent fires. We surface a short "sent" confirmation
+    // in the panel thread so the user knows where it went.
+    if (externalCount > 0) {
+      client.sendAsk(turnId, bundle.id, text);
+      setMessages((ms) => [
+        ...ms,
+        { role: "agent", text: "→ Sent to claude in your terminal." },
+      ]);
+      return;
+    }
+    setActiveTurn({ turnId, prompt: text, sel: lastSel });
     setChanges([]);
     setRevisitId("");
     setActivity("starting");
@@ -1188,6 +1211,29 @@ function App(props: { port: number }) {
               ]),
             ],
           ),
+          // #162: external-claude attached badge. Lives at the top of
+          // the panel body so the user always sees where their Send
+          // will go before they type. Hidden when count = 0.
+          externalCount > 0
+            ? h(
+                "div",
+                {
+                  style:
+                    "display:flex;align-items:center;gap:8px;margin:8px 0;padding:6px 10px;border-radius:4px;background:#0f1f15;border:1px solid #1f4030;color:#9fe7b8;font-size:11px",
+                },
+                [
+                  h("span", {
+                    style:
+                      "width:8px;height:8px;border-radius:50%;background:#2fd16b;box-shadow:0 0 6px #2fd16b;flex:none",
+                  }),
+                  h(
+                    "span",
+                    {},
+                    `→ claude in terminal (${externalCount === 1 ? "1 session" : `${externalCount} sessions`})`,
+                  ),
+                ],
+              )
+            : null,
           settings,
           captureActivePill,
           captureDeniedNudge,

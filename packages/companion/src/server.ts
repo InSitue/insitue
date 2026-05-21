@@ -80,6 +80,15 @@ const clientMessage = z.discriminatedUnion("t", [
     bundleId: z.string().min(1),
     userMessage: z.string(),
   }),
+  // #162: routes the user's ASK Send through CLI/MCP subscribers
+  // instead of spawning the in-overlay headless agent. Only valid
+  // when subscribers.size > 0; the browser checks first.
+  z.object({
+    t: z.literal("agent-ask-external"),
+    turnId: z.string().min(1),
+    bundleId: z.string().min(1),
+    text: z.string(),
+  }),
   z.object({
     t: z.literal("agent-decision"),
     turnId: z.string().min(1),
@@ -155,7 +164,21 @@ export function startCompanion(opts: CompanionOptions): Server {
   // auth boundary; the URL path is just the "I'm a CLI, skip the
   // browser Origin check that doesn't apply to me" signal.
   const subscribers = new Set<WebSocket>();
+  // #162: authed browser clients we send `subscribers-attached`
+  // presence pushes to. The overlay listens for these to toggle
+  // its "→ claude in terminal" badge and route Send to external.
+  const browserClients = new Set<WebSocket>();
   const CLI_PATH = "/insitu/cli";
+
+  function broadcastSubscriberCount(): void {
+    const msg = JSON.stringify({
+      t: "subscribers-attached",
+      count: subscribers.size,
+    });
+    for (const c of browserClients) {
+      if (c.readyState === c.OPEN) c.send(msg);
+    }
+  }
 
   http.on("upgrade", (req, socket, head) => {
     if (!isLoopback(req)) {
@@ -213,6 +236,19 @@ export function startCompanion(opts: CompanionOptions): Server {
           }
           authed = true;
           send(ws, { t: "hello-ok", companionVersion: COMPANION_VERSION });
+          // #162: track browser clients (NOT CLI subscribers) so we
+          // can push subscribers-attached presence updates to them
+          // when CLI subscribers come and go. Browser clients are
+          // identified by NOT being on the CLI path.
+          if (!isCli) {
+            browserClients.add(ws);
+            // Initial sync so the badge reflects current state
+            // even if the subscriber connected before the browser.
+            send(ws, {
+              t: "subscribers-attached",
+              count: subscribers.size,
+            } as unknown as ServerMessage);
+          }
           orchestrator = new AgentOrchestrator({
             root: opts.root,
             transport: opts.transport ?? "cli-headless",
@@ -274,6 +310,26 @@ export function startCompanion(opts: CompanionOptions): Server {
             companionVersion: COMPANION_VERSION,
             projectRoot: opts.root,
           } as unknown as ServerMessage);
+          // #162: tell every browser the count changed so badges
+          // light up in real time.
+          broadcastSubscriberCount();
+          return;
+        }
+        if (msg.t === "agent-ask-external") {
+          // #162: re-broadcast the user's typed intent to all CLI/
+          // MCP subscribers. Do NOT spawn the in-overlay headless
+          // agent — the external claude is the source of truth for
+          // this turn. The subscriber (MCP bridge) joins this with
+          // the matching `broadcast-capture` by `bundleId`.
+          const askMsg = JSON.stringify({
+            t: "broadcast-ask" as const,
+            bundleId: msg.bundleId,
+            text: msg.text,
+            at: new Date().toISOString(),
+          });
+          for (const sub of subscribers) {
+            if (sub.readyState === sub.OPEN) sub.send(askMsg);
+          }
           return;
         }
         // zod `.optional()` widens to `T | undefined`; the pure
@@ -300,8 +356,13 @@ export function startCompanion(opts: CompanionOptions): Server {
       });
       // Subscribers stay in the set until they disconnect — without
       // this, broadcasts would pile up writes to dead sockets and
-      // throw inside the loop above.
-      ws.on("close", () => subscribers.delete(ws));
+      // throw inside the loop above. #162: also broadcast the new
+      // (lower) count to browsers so the badge clears.
+      ws.on("close", () => {
+        const wasSubscriber = subscribers.delete(ws);
+        browserClients.delete(ws);
+        if (wasSubscriber) broadcastSubscriberCount();
+      });
     });
   });
 
