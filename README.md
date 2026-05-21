@@ -1,94 +1,161 @@
 # InSitue
 
-Load your own running dev app, click or define any region on the page, and
-converse with an AI coding agent **in situ** — it sees the selected element +
-runtime context and edits your **real local codebase** with live reload.
+Pick an element in your running app, describe what you want
+changed, hit Send — `claude` in your terminal reads the file at
+exactly the right line and proposes the edit. Same widget powers
+production bug reports: end-users point at a problem, the
+InSitue Cloud autopilot opens a verified draft PR.
 
-Localhost-first. MIT. See the design/plan in
-`~/.claude/plans/curious-waddling-milner.md`.
+The picker IS the prompt.
 
-## Packages
-
-| Package | Role |
-|---|---|
-| `@insitue/capture-core` | **The seam.** Pure, serializable capture model + `CaptureSink` interface. No transport/agent/fs. Swapping the sink turns "local agentic edit" into a future "prod capture-only" with no rewrite. |
-| `@insitue/companion` | `npx insitu` — loopback-only WS, Origin-pinned + token-gated, project-scoped. Owns all fs/git/agent (browser never does). |
-| `@insitue/sdk` | Dev-only `<InSitue />` — a Preact **Shadow-DOM** overlay (style-isolated from host React/Tailwind) + the secure companion client. |
-
-## Status — M0–M4 complete ✅ (v1 plan delivered)
-
-- **M0** trust boundary: `127.0.0.1`-only bind, `Origin` allowlist, per-session
-  token, pinned protocol, prod-build refusal.
-- **M1** select → DOM→source (React fiber + Babel fallback) → `CaptureBundle`
-  with screenshot/styles/runtime + companion-resolved source span.
-- **M2** the full loop: pick → **ask in situ** → grounded answer → propose →
-  per-file **dry-run diff** → **Approve & write** (atomic, sandboxed) → ride
-  host HMR → **Undo** (git-checkpoint, byte-exact restore). Three Claude Code
-  transports (`cli-headless` default, `mcp`, `sdk`) behind one provider seam;
-  Max-billing protected by env scrub.
-- **M3** safety/polish: reject-with-reason + per-file approve subset;
-  session model — **Undo all** + surgical **Commit (local)** (protocol v3);
-  compile/runtime-error **feedback loop** (re-capture → agent fixes its own
-  change); streaming elapsed/thinking + a **real** HMR-settle signal.
-- **M4** prod capture-only seam **validated** (not shipped): a real
-  `NODE_ENV=production` build with **no companion** still produces the same
-  `CaptureBundle` → `IssueTrackerSink` draft (selector + DOM + screenshot;
-  source resolved client-side via the babel attribute). Proves the
-  local→prod offering is a sink swap, not a rewrite. 29 automated tests
-  (`pnpm test`).
-
-**Cloud — InSitue Autopilot (`apps/cloud`) ✅ built (D0 + C0–C10).**
-Bug report → verified draft PR. `@insitue/agent-core` (the engine,
-extracted MIT) reused verbatim by a Next.js-on-Vercel app: GitHub-OAuth
-auth + multi-tenant Postgres, public `/v1/capture` ingest
-(origin/schema/dedupe/quota), GitHub-App + Vercel integrations,
-confidence- and verify-gated autopilot run in a Vercel-Sandbox microVM,
-Safe/Standard/YOLO delivery, hybrid Stripe billing, email + Sentry,
-admin/kill-switch, marketing/legal. **Runs entirely on fakes with $0
-spend**; real Claude (G1) and real Stripe (G2) are hard-gated behind
-explicit opt-in. **49 cloud + 31 engine tests green**, CI in
-`.github/workflows/ci.yml`. Go-live = slot creds per the launch
-runbook. The local OSS loop is unchanged.
-
-## Runbooks
-
-| Topic | Doc |
-|---|---|
-| Agent transports (`--agent-transport`, optional peers, billing) | [`docs/runbooks/insitu-agent-transports.md`](docs/runbooks/insitu-agent-transports.md) |
-| InSitue Cloud go-live (creds, G1/G2 gates, checklist) | [`docs/runbooks/insitue-cloud-launch.md`](docs/runbooks/insitue-cloud-launch.md) |
-
-## Demo (one command)
-
-```sh
-pnpm install
-pnpm demo          # builds, then runs the companion + React example together
+```
+┌───────────────────────────────┐         ┌────────────────────┐
+│ Your running app              │         │  claude (terminal) │
+│ ┌───────────────────────────┐ │         │                    │
+│ │ <InSitueCapture />        │ │  pick   │  /insitue:connect  │
+│ │  · Pick                   │ ├────────►│                    │
+│ │  · Describe               │ │         │  → reads file      │
+│ │  · Send                   │ │         │  → proposes diff   │
+│ └───────────────────────────┘ │         │  → awaits approval │
+└───────────────────────────────┘         │  → writes          │
+                                          └────────────────────┘
 ```
 
-Open <http://localhost:3100>, click **Select** in the InSitue pill, then
-click any element — the panel shows its real `file:line`, component
-stack, styles, screenshot and runtime. Ctrl+C stops both.
+## Get started in 60 seconds
 
-## Dev
-
-```sh
-pnpm build
-pnpm test          # M0 security/handshake tests
-pnpm dev           # watch-build all packages
+```bash
+# 1. Add the SDK to your app
+npm install -D @insitue/sdk
 ```
-
-## Dogfooding into an existing app (manual, dev-only)
-
-InSitue is consumed by adding the dev-only component to a host app's root layout.
-This is intentionally a **manual** step you control (e.g. in another repo) so it
-never lands in that app's production build:
 
 ```tsx
-// app/layout.tsx (or equivalent) — DEV ONLY
-{process.env.NODE_ENV === "development" && <InSitue />}
+// 2. Mount it (Next.js example)
+import { InSitueCapture } from "@insitue/sdk";
+
+export default function RootLayout({ children }) {
+  return (
+    <html>
+      <body>
+        {children}
+        {process.env.NODE_ENV !== "production" && <InSitueCapture />}
+      </body>
+    </html>
+  );
+}
 ```
 
-Then run the app's dev server and, beside it, `npx insitu` from the app's repo
-root. The overlay connects to the companion on `127.0.0.1:5747`.
+```
+# 3. Install the claude plugin (one-time, in any claude session)
+/plugin marketplace add InSitue/insitue
+/plugin install insitue@insitue-plugins
+```
 
-> Not auto-wired into any existing repo by this project — keeping the host app's
-> build/deploy untouched is a deliberate safety choice.
+```bash
+# 4. Use it — two terminals
+pnpm dev                      # your normal dev server (any port)
+claude → /insitue:connect     # in another terminal
+```
+
+Click in your browser. Done.
+
+Detailed setup: **[`packages/claude-plugin/README.md`](packages/claude-plugin/README.md)**.
+
+## What's in this monorepo
+
+| Package | What it does | npm |
+|---|---|---|
+| **`@insitue/sdk`** | Browser widget. `<InSitueCapture />` — same component, dev (companion sink) or prod (cloud sink) mode. | [`@insitue/sdk`](https://www.npmjs.com/package/@insitue/sdk) |
+| **`@insitue/companion`** | Local loopback bridge. Token-auth, project-sandboxed. Usually auto-spawned by the claude plugin; can run standalone. | [`@insitue/companion`](https://www.npmjs.com/package/@insitue/companion) |
+| **`@insitue/claude-plugin`** | Claude Code plugin shipping the `/insitue:connect` slash command + MCP bridge. Auto-spawns the companion. | [`@insitue/claude-plugin`](https://www.npmjs.com/package/@insitue/claude-plugin) |
+| `@insitue/capture-core` | Pure types: `CaptureBundle`, protocol versions, sink interfaces. Shared by every package. | [`@insitue/capture-core`](https://www.npmjs.com/package/@insitue/capture-core) |
+| `@insitue/agent-core` | Provider-agnostic agent loop (used by the cloud autopilot; the local flow now delegates to claude via the plugin). | [`@insitue/agent-core`](https://www.npmjs.com/package/@insitue/agent-core) |
+| `@insitue/swc-source-attr` | SWC plugin alternative to the babel data-attribute injector (Next.js with SWC). | [`@insitue/swc-source-attr`](https://www.npmjs.com/package/@insitue/swc-source-attr) |
+| `apps/cloud` | The InSitue Cloud SaaS — production sink for the same widget. Autopilot + GitHub-App + Vercel integration. | (not on npm; deployed to Vercel) |
+
+## Dev mode (this monorepo)
+
+```bash
+pnpm install
+pnpm build               # build the whole graph in dep order
+pnpm test                # run all package tests
+pnpm demo                # spin up the React example + companion together
+```
+
+The React example at `examples/react-app` is the simplest
+end-to-end exercise: a small React app with `<InSitue />`
+mounted, plus the companion in the same directory.
+
+```bash
+cd examples/react-app
+pnpm dev &                                              # vite on :3100
+node /Users/rodleviton/Code/insitue/packages/companion/dist/cli.js dev
+# In another terminal: claude → /insitue:connect
+```
+
+## Production sink (InSitue Cloud)
+
+The same `<InSitueCapture />` widget, with a `projectKey` prop,
+posts captures to InSitue Cloud:
+
+```tsx
+<InSitueCapture projectKey={process.env.NEXT_PUBLIC_INSITUE_KEY!} />
+```
+
+End-users get a friendly "Report a problem" pill in the corner of
+your app. Reports land in your InSitue inbox; the autopilot
+opens a verified draft PR for each one. See
+[`apps/cloud`](apps/cloud) for the SaaS code (not consumed by
+end users — they just use the widget + the cloud's existing
+deployment at <https://www.insitue.com>).
+
+## Architecture
+
+```
+                       browser
+                       ┌─────────────────────────────────┐
+                       │  <InSitueCapture />             │
+                       │  (capture widget — one UI)      │
+                       └────────────┬──────────┬─────────┘
+                                    │          │
+                          devsink  HTTPS    cloud sink
+                                  WS │          │
+                                    ▼          ▼
+                       ┌──────────────────┐ ┌───────────────────┐
+                       │ @insitue/        │ │  InSitue Cloud    │
+                       │ companion        │ │  /v1/capture      │
+                       │ (loopback only)  │ │  (Vercel app)     │
+                       └──┬───────────────┘ └─────┬─────────────┘
+                          │                       │
+                  broadcast│                       │ autopilot
+                  on WS    ▼                       ▼ → GitHub PR
+                       ┌──────────────────────┐
+                       │ @insitue/            │
+                       │ claude-plugin (MCP)  │
+                       └──────┬───────────────┘
+                              │ tool: next_pick
+                              ▼
+                       ┌──────────────────────┐
+                       │ claude (terminal)    │
+                       │ /insitue:connect     │
+                       └──────────────────────┘
+```
+
+Browser side: identical widget, identical bundle, identical
+screenshot pipeline. The submit step branches once — to the
+cloud's HTTPS endpoint OR to the local companion's loopback WS.
+
+## Security boundary
+
+- **Companion**: loopback-only bind (refuses non-127.0.0.1 at
+  the socket), per-session token written to
+  `.insitu/session.json` (gitignored), Origin pin on every
+  browser connection.
+- **Cloud**: publishable `projectKey` is Origin-pinned and
+  quota-gated server-side. Spend caps + per-project allow-lists.
+- **Claude bridge**: the MCP server NEVER writes files. Claude
+  writes via its native `Edit` tool, with the user's explicit
+  approval each time.
+
+## License
+
+MIT. Every package.
