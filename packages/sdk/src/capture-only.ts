@@ -440,23 +440,50 @@ function CaptureApp(props: AppProps) {
   if (phase === "idle" || phase === "picking") {
     const picking = phase === "picking";
     const offline = isDev && companionState !== "connected";
+
+    // Dev launcher: just the dot. No pill, no label. Picking state
+    // becomes a pulsing dot; idle is a solid dot (or grey when
+    // companion offline). Cloud keeps the labelled pill below.
+    if (isDev) {
+      const dotColor = offline ? "#9a9aa4" : CLOUD.accentSolid;
+      const ringColor = offline
+        ? "rgba(154,154,164,.4)"
+        : "rgba(87,81,230,.45)";
+      return h(
+        "button",
+        {
+          onClick: picking ? undefined : () => void startPick(),
+          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;width:20px;height:20px;border-radius:5px;background:${dotColor};box-shadow:0 4px 14px ${ringColor};cursor:${picking ? "default" : "pointer"};${picking ? "animation:ipulse 1.1s ease-in-out infinite;" : ""}transition:transform .15s ease`,
+          title: picking
+            ? "Click an element · Esc to cancel"
+            : offline
+              ? "InSitue companion not running — start `claude` with /insitue:connect"
+              : "Pick an element to talk to claude about",
+        },
+        picking
+          ? h(
+              "style",
+              {},
+              "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
+            )
+          : null,
+      );
+    }
+
+    // Cloud launcher: pill with dot + "Report a problem" / picking hint.
     return h(
       "button",
       {
         onClick: picking ? undefined : () => void startPick(),
         style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;align-items:center;gap:9px;cursor:${picking ? "default" : "pointer"};padding:11px 16px;font:600 13.5px/1 ${C.sans};color:${C.ink};background:${C.surface};border:1px solid ${C.line};border-radius:999px;box-shadow:${C.shadow};letter-spacing:-.01em`,
-        title: isDev
-          ? offline
-            ? "InSitue companion not running — start `claude` with /insitue:connect"
-            : "Pick an element to talk to claude about"
-          : "Report a problem",
+        title: "Report a problem",
       },
       picking
         ? [
             h("span", {
               style: `width:9px;height:9px;border-radius:50%;background:${C.accentSolid};animation:ipulse 1.1s ease-in-out infinite`,
             }),
-            h("span", { style: `color:${C.sub}` }, isDev ? "Click an element" : "Click the broken element"),
+            h("span", { style: `color:${C.sub}` }, "Click the broken element"),
             h("span", { style: `color:${C.faint}` }, "· Esc to cancel"),
             h(
               "style",
@@ -464,19 +491,7 @@ function CaptureApp(props: AppProps) {
               "@keyframes ipulse{0%,100%{opacity:.35}50%{opacity:1}}",
             ),
           ]
-        : isDev
-          ? [
-              h("span", {
-                style: `width:9px;height:9px;border-radius:50%;background:${offline ? "#9a9aa4" : "#5fd190"};box-shadow:${offline ? "none" : "0 0 6px #5fd190"}`,
-              }),
-              h("span", {}, "InSitue Dev"),
-              h(
-                "span",
-                { style: `color:${C.faint};font-family:${C.mono};font-size:11px` },
-                offline ? "offline" : "→ claude",
-              ),
-            ]
-          : [dot, "Report a problem"],
+        : [dot, "Report a problem"],
     );
   }
 
