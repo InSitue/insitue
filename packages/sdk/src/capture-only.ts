@@ -353,6 +353,42 @@ function CaptureApp(props: AppProps) {
     return undefined;
   }, [phase]);
 
+  // Global keyboard shortcuts — power-user affordance. Cmd/Ctrl+K
+  // starts a pick from anywhere on the page (raycast/linear vibe).
+  // Esc cancels picking or closes the panel. These run on the host
+  // document, NOT inside our shadow root, because the user might be
+  // anywhere on the page when they fire them.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      // Don't intercept when the host app's own text inputs are
+      // focused — let the user type "k" in their forms.
+      const t = ev.target as Element | null;
+      const tagName = t?.tagName?.toLowerCase();
+      const inHostInput =
+        tagName === "input" ||
+        tagName === "textarea" ||
+        (t as HTMLElement | null)?.isContentEditable;
+
+      const isMeta = ev.metaKey || ev.ctrlKey;
+      if (isMeta && (ev.key === "k" || ev.key === "K") && !inHostInput) {
+        if (phase === "idle" || phase === "compose" || phase === "sent") {
+          ev.preventDefault();
+          void startPick();
+        }
+        return;
+      }
+      if (ev.key === "Escape") {
+        if (phase === "compose") {
+          ev.preventDefault();
+          reset();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase]);
+
   const startPick = async () => {
     setPhase("picking");
     try {
@@ -457,6 +493,14 @@ function CaptureApp(props: AppProps) {
                 "span",
                 { style: `color:${C.faint};font-family:${C.mono};font-size:11px` },
                 offline ? "offline" : "→ claude",
+              ),
+              h(
+                "span",
+                {
+                  style: `color:${C.faint};font-family:${C.mono};font-size:10.5px;padding:1px 5px;border:1px solid ${C.line};border-radius:4px;background:${C.surface2}`,
+                  title: "Press to pick an element",
+                },
+                "⌘K",
               ),
             ]
           : [dot, "Report a problem"],
