@@ -274,11 +274,96 @@ async function renderViewportCrop(
     if (looksBlankUniform(ctx, out.width, out.height)) {
       return { dataUrl: null, failedImages };
     }
+    // Verify each <img> actually rendered into the canvas. Catches
+    // the case where html-to-image silently dropped an image (e.g.
+    // next/image + aspect-ratio + object-fit:cover) without
+    // triggering an obvious error. Flagged imgs join `failedImages`
+    // so layer-2 escalates automatically.
+    detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
     return { dataUrl: out.toDataURL("image/png"), failedImages };
   } finally {
     // Restore original srcs even if rasterise threw — the page must
     // be visually identical to before the capture.
     restoreImages();
+  }
+}
+
+/** Post-render image verification — for each `<img>` whose bbox
+ *  intersects the crop, sample pixels in the rasterised canvas at
+ *  the img's expected location. If the area is uniform (single
+ *  colour, alpha ~ background) the image DIDN'T actually render
+ *  inside html-to-image's foreignObject pipeline — common with
+ *  next/image (`<img style="position:absolute; object-fit:cover">`
+ *  inside an `aspect-ratio` parent — modern CSS that html-to-image
+ *  doesn't fully support). Detection adds the affected `<img>` to
+ *  `failedImages` which `assessCaptureQuality` then uses to trigger
+ *  the layer-2 `getDisplayMedia` escalation — so the user gets a
+ *  pixel-perfect capture (with permission) instead of a silent
+ *  empty image. */
+function detectUnrenderedImages(
+  cropCtx: CanvasRenderingContext2D,
+  cropRect: DOMRect,
+  cropCanvas: HTMLCanvasElement,
+  pixelRatio: number,
+  failedImages: Set<HTMLImageElement>,
+): void {
+  const imgs = Array.from(
+    document.querySelectorAll<HTMLImageElement>("img"),
+  ).filter(
+    (img) => !img.closest?.("#insitu-root, [data-insitu-layer]"),
+  );
+
+  for (const img of imgs) {
+    if (failedImages.has(img)) continue; // already known-bad
+    const r = img.getBoundingClientRect();
+    // Only verify images visible in the crop, and large enough to
+    // sample meaningfully (sub-32px icons aren't worth the cost).
+    if (r.width < 32 || r.height < 32) continue;
+    const overlapX = Math.min(r.right, cropRect.x + cropRect.width)
+      - Math.max(r.left, cropRect.x);
+    const overlapY = Math.min(r.bottom, cropRect.y + cropRect.height)
+      - Math.max(r.top, cropRect.y);
+    if (overlapX <= 0 || overlapY <= 0) continue;
+
+    // Sample 9 evenly-spaced points in the overlapping region.
+    // If all 9 are byte-identical → uniform fill → almost
+    // certainly the image is missing (real photos vary across
+    // any 3×3 grid).
+    const baseX = Math.max(r.left, cropRect.x);
+    const baseY = Math.max(r.top, cropRect.y);
+    const samples = new Set<string>();
+    try {
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 3; j++) {
+          const px = baseX + (overlapX * (i + 0.5)) / 3;
+          const py = baseY + (overlapY * (j + 0.5)) / 3;
+          // Convert viewport coords → crop-canvas pixel coords.
+          const cx = Math.max(
+            0,
+            Math.min(
+              cropCanvas.width - 1,
+              Math.round((px - cropRect.x) * pixelRatio),
+            ),
+          );
+          const cy = Math.max(
+            0,
+            Math.min(
+              cropCanvas.height - 1,
+              Math.round((py - cropRect.y) * pixelRatio),
+            ),
+          );
+          const d = cropCtx.getImageData(cx, cy, 1, 1).data;
+          samples.add(`${d[0]},${d[1]},${d[2]},${d[3]}`);
+        }
+      }
+    } catch {
+      // Tainted canvas — shouldn't happen with our embed path.
+      continue;
+    }
+    if (samples.size === 1) {
+      // Uniform fill where a real image should be → render failed.
+      failedImages.add(img);
+    }
   }
 }
 
