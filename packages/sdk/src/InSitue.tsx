@@ -48,6 +48,18 @@ export interface InSitueCaptureProps {
    * (neither set): console + JSON download + `window.__insitu_capture__`.
    */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
+  /**
+   * Default the user's "Always pixel-perfect screenshots" setting
+   * to `true` on mount — every capture uses the `getDisplayMedia`
+   * OS-compositor path, paying a one-time tab-share permission per
+   * session in exchange for screenshots that are pixel-accurate
+   * across any content (next/image, video, canvas, cross-origin).
+   *
+   * Recommended for dev / dogfood, where capture quality matters
+   * more than the permission UX. Not the default — production
+   * end-users shouldn't see a permission dialog they didn't ask for.
+   */
+  defaultPixelPerfect?: boolean;
 }
 
 /**
@@ -63,19 +75,25 @@ export function InSitueCapture({
   projectKey,
   endpoint,
   onCapture,
+  defaultPixelPerfect,
 }: InSitueCaptureProps): null {
   useEffect(() => {
     let active = true;
     let dispose: (() => void) | undefined;
     void import("./capture-only.js").then((m) => {
       if (active) {
-        dispose = m.mountCaptureOnly({ projectKey, endpoint, onCapture });
+        dispose = m.mountCaptureOnly({
+          projectKey,
+          endpoint,
+          onCapture,
+          defaultPixelPerfect,
+        });
       }
     });
     return () => {
       active = false;
       dispose?.();
     };
-  }, [projectKey, endpoint, onCapture]);
+  }, [projectKey, endpoint, onCapture, defaultPixelPerfect]);
   return null;
 }

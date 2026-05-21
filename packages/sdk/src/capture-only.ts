@@ -21,6 +21,7 @@ import {
   retryDisplayMedia,
   stopDisplayMedia,
 } from "./capture.js";
+import { setCaptureSettings } from "./capture-settings.js";
 
 export interface CaptureOnlyOptions {
   /**
@@ -42,6 +43,17 @@ export interface CaptureOnlyOptions {
    * `window.__insitu_capture__` (useful for prod validation).
    */
   onCapture?: (draft: IssueDraft, bundle: CaptureBundle) => void;
+  /**
+   * Force the pixel-perfect (`getDisplayMedia`) path for every
+   * capture from mount. Costs a one-time tab-share permission per
+   * session in exchange for screenshots that are guaranteed to
+   * match what the user actually saw — bypasses every html-to-image
+   * quirk (next/image srcset, video frames, canvas content,
+   * cross-origin assets). Use in dev/dogfood where capture quality
+   * matters more than permission UX; leave off for prod end-users
+   * who shouldn't see a permission dialog uninvited.
+   */
+  defaultPixelPerfect?: boolean;
 }
 
 const DEFAULT_INGEST = "https://www.insitue.com/api/v1/capture";
@@ -463,6 +475,13 @@ function CaptureOnlyApp(props: AppProps) {
 
 export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   installRuntimeCollectors();
+  // Apply the host-app's preferred default for the pixel-perfect
+  // toggle BEFORE any capture can fire. Only writes when the host
+  // explicitly opts in — otherwise leaves the persisted user
+  // preference (or schema default of false) alone.
+  if (opts.defaultPixelPerfect === true) {
+    setCaptureSettings({ alwaysPixelPerfect: true });
+  }
   const host = document.createElement("div");
   host.id = "insitu-capture-root"; // internal sentinel (kept)
   host.setAttribute("data-insitu", "");
