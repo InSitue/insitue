@@ -78,6 +78,40 @@ test("screenshot unavailable → honest reason, never 'attached'", () => {
   assert.ok(!/Screenshot:\*\* attached/.test(d.body));
 });
 
+test("screenshot.source surfaces capture path in draft body", () => {
+  const bundle = {
+    ...base,
+    target: { confidence: "selector-only", componentStack: [], selector: "x" },
+    screenshot: {
+      mime: "image/png",
+      dataUrl: "data:image/png;base64,AA",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      source: "display-media",
+    },
+  };
+  const d = toIssueDraft(bundle);
+  assert.match(d.body, /Screenshot:\*\* attached \(display-media\)/);
+});
+
+test("screenshot.qualityNote surfaces graceful-degrade signal", () => {
+  const bundle = {
+    ...base,
+    target: { confidence: "selector-only", componentStack: [], selector: "x" },
+    screenshot: {
+      mime: "image/png",
+      dataUrl: "data:image/png;base64,AA",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+      source: "rasterise",
+      qualityNote: "2 non-CORS images couldn't be embedded",
+    },
+  };
+  const d = toIssueDraft(bundle);
+  assert.match(
+    d.body,
+    /Screenshot:\*\* attached \(rasterise\) — 2 non-CORS images couldn't be embedded/,
+  );
+});
+
 test("IssueTrackerSink.submit delivers exactly one draft", async () => {
   const seen = [];
   const sink = new IssueTrackerSink((d) => seen.push(d));

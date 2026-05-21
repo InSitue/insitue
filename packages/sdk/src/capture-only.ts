@@ -15,7 +15,12 @@ import {
 } from "@insitue/capture-core";
 import { installRuntimeCollectors } from "./runtime.js";
 import { beginPick } from "./picker.js";
-import { buildBundle } from "./capture.js";
+import {
+  buildBundle,
+  onDisplayMediaChange,
+  retryDisplayMedia,
+  stopDisplayMedia,
+} from "./capture.js";
 
 export interface CaptureOnlyOptions {
   /**
@@ -122,6 +127,42 @@ function CaptureOnlyApp(props: AppProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [bundle, setBundle] = useState<CaptureBundle | null>(null);
   const [note, setNote] = useState("");
+  // Tab-capture (getDisplayMedia) state — surfaces the "active"
+  // badge and the "enable for pixel-perfect" nudge.
+  const [tabCaptureActive, setTabCaptureActive] = useState(false);
+  const [tabCaptureDenied, setTabCaptureDenied] = useState(false);
+
+  useEffect(() => {
+    return onDisplayMediaChange((active, reason) => {
+      setTabCaptureActive(active);
+      if (reason === "denied") setTabCaptureDenied(true);
+      if (reason === "granted") setTabCaptureDenied(false);
+    });
+  }, []);
+
+  // Re-pick after enabling tab capture — rebuilds the bundle so the
+  // pixel-perfect path runs without needing the user to re-select.
+  const retryWithPixelPerfect = async () => {
+    if (!bundle?.target?.selector) {
+      // No selection to re-run — just grant the permission so the
+      // NEXT capture is pixel-perfect.
+      await retryDisplayMedia();
+      return;
+    }
+    const granted = await retryDisplayMedia();
+    if (granted) {
+      // Re-fire pick on the same element if we can resolve it; else
+      // fall back to a fresh pick so the user retries explicitly.
+      setPhase("picking");
+      const sel = await beginPick("element").catch(() => null);
+      if (sel) {
+        setBundle(await buildBundle(sel));
+        setPhase("compose");
+      } else {
+        setPhase("compose");
+      }
+    }
+  };
 
   const sink = new IssueTrackerSink(async (draft) => {
     // Always set the window hook — useful for prod validation
@@ -317,6 +358,61 @@ function CaptureOnlyApp(props: AppProps) {
               "Screenshot unavailable — sending the rest.",
             )
           : null,
+      // Nudge: the screenshot is structurally OK but some content
+      // couldn't be embedded (non-CORS img / video / canvas). Offer
+      // a one-tap upgrade to pixel-perfect mode + re-pick.
+      bundle?.screenshot?.qualityNote && !tabCaptureActive
+        ? h(
+            "div",
+            {
+              style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:#fff7ed;border:1px solid #fbd9b1;color:#8a4b00;border-radius:10px;font-size:12px;margin-bottom:12px`,
+            },
+            [
+              h(
+                "span",
+                { style: "flex:1" },
+                "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.",
+              ),
+              h(
+                "button",
+                {
+                  onClick: () => void retryWithPixelPerfect(),
+                  style: `all:unset;cursor:pointer;color:#5751e6;font-weight:600;padding:2px 8px;border:1px solid #c5c2ff;border-radius:6px;background:#fff`,
+                },
+                "Enable",
+              ),
+            ],
+          )
+        : null,
+      // Active badge — tells the user why the browser's red "tab
+      // sharing" indicator is on + lets them stop it.
+      tabCaptureActive
+        ? h(
+            "div",
+            {
+              style: `display:flex;align-items:center;gap:8px;padding:7px 11px;background:#ecfdf5;border:1px solid #b6e6cf;color:#117a52;border-radius:10px;font-size:11.5px;margin-bottom:12px`,
+            },
+            [
+              h("span", {
+                style:
+                  "width:8px;height:8px;border-radius:50%;background:#117a52;box-shadow:0 0 6px #117a52",
+              }),
+              h(
+                "span",
+                { style: "flex:1" },
+                "Tab capture active — screenshots are pixel-perfect.",
+              ),
+              h(
+                "button",
+                {
+                  onClick: () => stopDisplayMedia("user"),
+                  style: `all:unset;cursor:pointer;color:#117a52;font-weight:600;padding:2px 6px`,
+                },
+                "Stop",
+              ),
+            ],
+          )
+        : null,
       h("textarea", {
         value: note,
         rows: 3,

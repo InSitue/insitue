@@ -1,7 +1,29 @@
 /**
- * Assembles a `CaptureBundle` from a picker selection using the pure
- * capture-core resolvers + an html-to-image screenshot crop + the
- * runtime ring buffers. This is the SDK's `CaptureCore.buildBundle`.
+ * Assembles a `CaptureBundle` from a picker selection — the SDK's
+ * `CaptureCore.buildBundle`. Screenshot capture is the primary signal
+ * a reviewer (human or agent) uses to verify a bug, so it gets a
+ * layered, perfect-by-default strategy:
+ *
+ *   1. **html-to-image rasterise** — full-document render + crop.
+ *      `html-to-image@1.11.13` already fetches cross-origin `<img>`
+ *      URLs via `fetch()` and embeds them as `data:` URLs before the
+ *      canvas paints, so CORS-friendly CDNs (Supabase, Cloudinary,
+ *      most S3-with-CORS setups) render correctly with NO permission
+ *      ask. Non-CORS URLs fall back to an explicit placeholder.
+ *
+ *   2. **`getDisplayMedia` escalation** — when layer 1's quality
+ *      check reports unembeddable content (failed `<img>`, any
+ *      `<video>`, any `<canvas>`) the SDK requests one-time tab-
+ *      capture permission for a pixel-perfect OS-compositor grab.
+ *      The MediaStream is cached for the session so subsequent
+ *      captures skip the prompt.
+ *
+ *   3. **Graceful degrade** — if `getDisplayMedia` is unsupported or
+ *      denied, ship the layer-1 result with a `qualityNote` and
+ *      surface a retry nudge in the overlay.
+ *
+ * See `~/.claude/plans/curious-waddling-milner.md` for the full
+ * rationale + rejected alternatives.
  */
 import { toCanvas } from "html-to-image";
 import {
@@ -16,6 +38,7 @@ import {
   type SelectionInput,
 } from "@insitue/capture-core";
 import { runtimeSnapshot } from "./runtime.js";
+import { getCaptureSettings } from "./capture-settings.js";
 
 /** Is `url` a cross-origin resource that would taint a canvas?
  *  data:/blob: and same-origin are safe; anything else is a risk. */
@@ -30,49 +53,24 @@ function crossOrigin(url: string | null | undefined): boolean {
   }
 }
 
-/** `html-to-image` rasterises via canvas; a cross-origin <img>/<video>/
- *  CSS background with no working CORS taints it and `toPng` returns a
- *  blank-but-valid data URL (it does NOT throw). Detect the offender up
- *  front so we can be honest instead of showing an empty box. Returns a
- *  short human reason, or null if a screenshot should be safe. */
-function crossOriginMediaReason(root: Element): string | null {
-  const els = [root, ...root.querySelectorAll("*")];
-  for (const el of els) {
-    if (el instanceof HTMLImageElement) {
-      if (
-        crossOrigin(el.currentSrc || el.src) &&
-        el.crossOrigin == null
-      ) {
-        const host = (() => {
-          try {
-            return new URL(el.currentSrc || el.src).host;
-          } catch {
-            return "cross-origin";
-          }
-        })();
-        return `cross-origin <img> (${host})`;
-      }
-    }
-    const bg = getComputedStyle(el).backgroundImage;
-    const m = bg && bg !== "none" ? /url\(["']?([^"')]+)["']?\)/.exec(bg) : null;
-    if (m && crossOrigin(m[1])) return "cross-origin CSS background image";
-    if (
-      (el instanceof HTMLVideoElement || el instanceof HTMLCanvasElement) &&
-      crossOrigin((el as HTMLVideoElement).src)
-    ) {
-      return `cross-origin <${el.tagName.toLowerCase()}>`;
-    }
-  }
-  return null;
-}
+/** Visually-honest "image unavailable" marker used as html-to-image's
+ *  `imagePlaceholder`. A 32×32 SVG with diagonal stripes on a muted
+ *  background — the browser stretches it to the failing img's
+ *  intrinsic size, so the reviewer sees a recognisable "missing
+ *  asset" block instead of a void. Inline data URL keeps the SDK
+ *  bundle self-contained. */
+const IMAGE_PLACEHOLDER =
+  "data:image/svg+xml;utf8," +
+  encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">` +
+      `<rect width="32" height="32" fill="#e8e8e8"/>` +
+      `<path d="M0 0 L32 32 M32 0 L0 32" stroke="#b0b0b0" stroke-width="1.5"/>` +
+      `</svg>`,
+  );
 
 /** Walk up from the picked element to find a meaningfully-sized
  *  ancestor to screenshot — so the thumbnail has enough visual
- *  context for a human reviewer to recognise the bug. Heuristic:
- *  the first ancestor at least 420×140 pixels, but stop short of
- *  anything larger than ~1.2× the viewport (otherwise we'd
- *  screenshot the whole page). Bounded by depth so we never run
- *  away. */
+ *  context for a human reviewer to recognise the bug. */
 function findContextAncestor(el: HTMLElement): HTMLElement {
   const minW = 420;
   const minH = 140;
@@ -81,11 +79,7 @@ function findContextAncestor(el: HTMLElement): HTMLElement {
   let cur: HTMLElement = el;
   for (let depth = 0; depth < 8; depth++) {
     const r = cur.getBoundingClientRect();
-    // Big enough already — stop here.
     if (r.width >= minW && r.height >= minH) return cur;
-    // About to overshoot — stop one level back. (`cur` itself is
-    // returned so the screenshot is still as large as we can get
-    // without blowing the viewport.)
     const parent = cur.parentElement;
     if (!parent) return cur;
     const pr = parent.getBoundingClientRect();
@@ -96,21 +90,21 @@ function findContextAncestor(el: HTMLElement): HTMLElement {
 }
 
 /** Rasterise the FULL document and crop to `cropRect` (viewport
- *  coords, CSS pixels). Rendering the whole document — not just
- *  the targeted subtree — is the only honest way to capture
- *  html/body backgrounds, parent backdrop decorations, fixed/
- *  sticky chrome, and sibling overlays that compose what the
- *  user actually sees. Falls back gracefully on cross-origin
- *  media by filtering it out (a blank rect inside the picked
- *  region is better than refusing the whole capture). */
+ *  coords, CSS pixels). Rendering the whole document — not just the
+ *  picked subtree — is the only honest way to capture html/body
+ *  backgrounds, parent backdrop decorations, fixed/sticky chrome,
+ *  and sibling overlays that compose what the user actually sees.
+ *
+ *  Cross-origin handling: we let html-to-image's built-in
+ *  `embedImages` do its job (`fetch()` cross-origin URLs, embed as
+ *  data URLs — canvas is never tainted). Non-CORS fetch failures
+ *  fall back to `IMAGE_PLACEHOLDER`. */
 async function renderViewportCrop(
   cropRect: DOMRect,
   pixelRatio: number,
 ): Promise<string | null> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
-  // Pick whichever root has a non-transparent paint; html-to-image
-  // composites against this, so it has to match the visual.
   const backgroundColor =
     bodyBg && bodyBg !== "rgba(0, 0, 0, 0)" && bodyBg !== "transparent"
       ? bodyBg
@@ -122,23 +116,14 @@ async function renderViewportCrop(
     pixelRatio,
     cacheBust: true,
     backgroundColor,
-    filter: (n) => {
-      if (
+    imagePlaceholder: IMAGE_PLACEHOLDER,
+    // Only filter out our own overlay layers — leave cross-origin
+    // <img>s in place so embedImages can fetch+inline them.
+    filter: (n) =>
+      !(
         n instanceof Element &&
         n.closest?.("#insitu-root, [data-insitu-layer]")
-      ) {
-        return false;
-      }
-      // Drop cross-origin images that would taint the canvas. We'd
-      // rather render a hole than fail the whole capture — the
-      // surrounding context still helps the reviewer.
-      if (n instanceof HTMLImageElement) {
-        if (crossOrigin(n.currentSrc || n.src) && n.crossOrigin == null) {
-          return false;
-        }
-      }
-      return true;
-    },
+      ),
   });
 
   // cropRect is viewport-relative; the full-document render is
@@ -161,7 +146,380 @@ async function renderViewportCrop(
     out.width,
     out.height,
   );
+
+  // Defensive: sample the cropped canvas. If every sampled pixel is
+  // identical, html-to-image probably emitted a silent-blank-PNG
+  // (the failure mode the original `crossOriginMediaReason` bailout
+  // was trying to catch). Treat as a failed rasterise.
+  if (looksBlankUniform(ctx, out.width, out.height)) {
+    return null;
+  }
   return out.toDataURL("image/png");
+}
+
+/** Cheap blank-detection — sample 16 evenly spaced pixels; if they're
+ *  all bytewise identical, the canvas is almost certainly a single-
+ *  colour rectangle (silent rasterise failure). One-colour real UI
+ *  is rare enough that a false positive here just escalates to the
+ *  pixel-perfect path — not a regression. */
+function looksBlankUniform(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+): boolean {
+  if (w < 4 || h < 4) return false;
+  const samples: string[] = [];
+  for (let i = 0; i < 4; i++) {
+    for (let j = 0; j < 4; j++) {
+      const x = Math.floor((w * (i + 0.5)) / 4);
+      const y = Math.floor((h * (j + 0.5)) / 4);
+      try {
+        const px = ctx.getImageData(x, y, 1, 1).data;
+        samples.push(`${px[0]},${px[1]},${px[2]},${px[3]}`);
+      } catch {
+        // Tainted canvas (shouldn't happen with our embed path —
+        // but if it does, treat as opaque-blank, escalate).
+        return true;
+      }
+    }
+  }
+  return new Set(samples).size === 1;
+}
+
+interface QualityAssessment {
+  /** A non-placeholder `<img>` failed to load (naturalWidth/Height
+   *  === 0 with a non-empty src) — html-to-image's fetch-embed
+   *  probably hit a non-CORS origin. */
+  unembeddableImages: number;
+  /** Any `<video>` element in the crop — its current frame can't be
+   *  pulled cross-origin via canvas, so escalate to OS-compositor. */
+  hasVideo: boolean;
+  /** Any `<canvas>` element with non-trivial content — html-to-image
+   *  can't always read its pixels (tainted by upstream draws). */
+  hasCanvas: boolean;
+}
+
+/** Walk the elements geometrically inside `cropRect` and decide
+ *  whether the layer-1 screenshot is structurally perfect. Anything
+ *  flagged here triggers the layer-2 `getDisplayMedia` escalation. */
+function assessCaptureQuality(cropRect: DOMRect): QualityAssessment {
+  const out: QualityAssessment = {
+    unembeddableImages: 0,
+    hasVideo: false,
+    hasCanvas: false,
+  };
+  const all = document.querySelectorAll("img, video, canvas");
+  for (const el of all) {
+    if (
+      el instanceof Element &&
+      el.closest?.("#insitu-root, [data-insitu-layer]")
+    ) {
+      continue;
+    }
+    const r = el.getBoundingClientRect();
+    // "Inside crop" = element's box overlaps the crop rect.
+    const overlaps =
+      r.right >= cropRect.x &&
+      r.left <= cropRect.x + cropRect.width &&
+      r.bottom >= cropRect.y &&
+      r.top <= cropRect.y + cropRect.height;
+    if (!overlaps) continue;
+    if (el instanceof HTMLImageElement) {
+      const src = el.currentSrc || el.src;
+      if (!src) continue;
+      // `complete && naturalWidth > 0` means the browser successfully
+      // loaded it — html-to-image's CORS fetch may still fail, but
+      // it'll only fail when the load succeeded WITHOUT CORS (the
+      // original load was a no-cors GET; the fetch-embed needs CORS
+      // headers in the response). We flag both failure modes:
+      //  - browser couldn't load it at all (broken img)
+      //  - browser loaded it but origin doesn't serve CORS (will
+      //    fall back to IMAGE_PLACEHOLDER in the rasterise)
+      const browserLoaded = el.complete && el.naturalWidth > 0;
+      const corsSafe = !crossOrigin(src) || el.crossOrigin != null;
+      if (!browserLoaded || !corsSafe) {
+        out.unembeddableImages++;
+      }
+    } else if (el instanceof HTMLVideoElement) {
+      // Videos can be same-origin but we still can't get the current
+      // frame into html-to-image — escalate.
+      if (r.width > 0 && r.height > 0) out.hasVideo = true;
+    } else if (el instanceof HTMLCanvasElement) {
+      if (r.width > 0 && r.height > 0) out.hasCanvas = true;
+    }
+  }
+  return out;
+}
+
+function describeImperfection(q: QualityAssessment): string {
+  const parts: string[] = [];
+  if (q.unembeddableImages > 0) {
+    parts.push(
+      `${q.unembeddableImages} non-CORS image${q.unembeddableImages > 1 ? "s" : ""}`,
+    );
+  }
+  if (q.hasVideo) parts.push("video frame");
+  if (q.hasCanvas) parts.push("canvas content");
+  return parts.join(" + ");
+}
+
+// ---------------------------------------------------------------
+// Layer 2 — `getDisplayMedia` pixel-perfect capture.
+
+/** Session-scoped cache for the active tab-capture MediaStream. The
+ *  stream pays a one-time browser permission prompt; subsequent
+ *  captures in the same session reuse it instantly. */
+const displayMediaState: {
+  stream: MediaStream | null;
+  trackEndedHandler: (() => void) | null;
+  idleTimer: ReturnType<typeof setTimeout> | null;
+  deniedAt: number | null;
+} = {
+  stream: null,
+  trackEndedHandler: null,
+  idleTimer: null,
+  deniedAt: null,
+};
+
+const IDLE_MS = 90_000;
+
+/** Listeners that want to react when the tab-capture stream is
+ *  granted, ended, or denied — used by the overlay to flip the
+ *  "tab capture active" pill on/off. */
+type DisplayMediaListener = (active: boolean, reason?: string) => void;
+const displayMediaListeners = new Set<DisplayMediaListener>();
+export function onDisplayMediaChange(l: DisplayMediaListener): () => void {
+  displayMediaListeners.add(l);
+  // Initial sync.
+  l(displayMediaState.stream != null);
+  return () => displayMediaListeners.delete(l);
+}
+function notifyDisplayMedia(reason?: string): void {
+  const active = displayMediaState.stream != null;
+  for (const l of displayMediaListeners) l(active, reason);
+}
+
+/** Stop the cached stream and clear all hooks. Called on overlay
+ *  close, page hide, idle expiry, or explicit user stop. */
+export function stopDisplayMedia(reason = "stopped"): void {
+  if (displayMediaState.stream) {
+    for (const t of displayMediaState.stream.getTracks()) t.stop();
+  }
+  if (displayMediaState.idleTimer) clearTimeout(displayMediaState.idleTimer);
+  if (
+    displayMediaState.trackEndedHandler &&
+    displayMediaState.stream
+  ) {
+    for (const t of displayMediaState.stream.getTracks()) {
+      t.removeEventListener("ended", displayMediaState.trackEndedHandler);
+    }
+  }
+  displayMediaState.stream = null;
+  displayMediaState.trackEndedHandler = null;
+  displayMediaState.idleTimer = null;
+  notifyDisplayMedia(reason);
+}
+
+function bumpIdleTimer(): void {
+  if (displayMediaState.idleTimer) clearTimeout(displayMediaState.idleTimer);
+  displayMediaState.idleTimer = setTimeout(
+    () => stopDisplayMedia("idle"),
+    IDLE_MS,
+  );
+}
+
+/** True when the browser supports the tab-capture API. */
+function supportsDisplayMedia(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    typeof navigator.mediaDevices?.getDisplayMedia === "function"
+  );
+}
+
+/** Resolve (or create) the session-scoped `getDisplayMedia`
+ *  MediaStream. Returns null if unsupported, denied, or already
+ *  denied this session (debounced — we don't re-prompt the same
+ *  session if the user said no). */
+async function ensureDisplayMediaStream(): Promise<MediaStream | null> {
+  if (!supportsDisplayMedia()) return null;
+  if (displayMediaState.stream) {
+    bumpIdleTimer();
+    return displayMediaState.stream;
+  }
+  // Debounce repeated prompts after a deny — re-prompting on every
+  // capture would be hostile UX. The overlay's explicit "Enable"
+  // nudge clears this flag.
+  if (displayMediaState.deniedAt && Date.now() - displayMediaState.deniedAt < 60_000) {
+    return null;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      // `displaySurface: 'browser'` + `preferCurrentTab: true` makes
+      // Chrome/Edge default-select the current tab in the prompt.
+      // Other browsers ignore the hints; user still picks manually.
+      video: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        displaySurface: "browser",
+      } as MediaTrackConstraints,
+      audio: false,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      preferCurrentTab: true,
+    } as DisplayMediaStreamOptions);
+    displayMediaState.stream = stream;
+    displayMediaState.deniedAt = null;
+    // If the user clicks the browser's native "Stop sharing" button,
+    // tracks end on their own — sync our state.
+    const handler = () => stopDisplayMedia("track-ended");
+    for (const t of stream.getTracks()) t.addEventListener("ended", handler);
+    displayMediaState.trackEndedHandler = handler;
+    bumpIdleTimer();
+    notifyDisplayMedia("granted");
+    return stream;
+  } catch {
+    displayMediaState.deniedAt = Date.now();
+    notifyDisplayMedia("denied");
+    return null;
+  }
+}
+
+/** User-initiated retry — clears the deny-debounce and re-prompts. */
+export async function retryDisplayMedia(): Promise<boolean> {
+  displayMediaState.deniedAt = null;
+  const s = await ensureDisplayMediaStream();
+  return s != null;
+}
+
+/** Hide our overlay layers for the single frame we capture so the
+ *  panel and picker UI don't appear in the screenshot. Restores on
+ *  the next animation frame so the user barely sees the flicker. */
+function hideOverlayLayersBriefly(): () => void {
+  const id = "insitu-capture-hide";
+  // Hide via attribute selector so we don't fight specific
+  // implementations of the overlay layer.
+  const style = document.createElement("style");
+  style.id = id;
+  style.textContent = `
+    #insitu-root, [data-insitu-layer] { visibility: hidden !important; }
+  `;
+  document.head.appendChild(style);
+  return () => {
+    style.remove();
+  };
+}
+
+interface DisplayMediaGrab {
+  dataUrl: string;
+  /** True if the stream was just granted in this call (vs cached). */
+  fresh: boolean;
+}
+
+/** Grab a single frame from the tab-capture stream and crop to
+ *  `cropRect`. Returns null if no stream, frame grab fails, or the
+ *  user declines the permission. */
+async function tryGrabViaDisplayMedia(
+  cropRect: DOMRect,
+  pixelRatio: number,
+): Promise<DisplayMediaGrab | null> {
+  const wasActive = displayMediaState.stream != null;
+  const stream = await ensureDisplayMediaStream();
+  if (!stream) return null;
+  const fresh = !wasActive;
+  bumpIdleTimer();
+
+  // Hide our overlay so it doesn't appear in the captured frame.
+  const restoreOverlay = hideOverlayLayersBriefly();
+  // Yield one paint so the visibility change takes effect before
+  // the frame grab fires. Two rAFs is paranoid but stable across
+  // browsers.
+  await new Promise<void>((r) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => r())),
+  );
+
+  try {
+    const track = stream.getVideoTracks()[0];
+    if (!track) return null;
+    let bitmap: ImageBitmap | null = null;
+    // ImageCapture is the cleanest path; fall back to a hidden
+    // <video> + drawImage where the API isn't exposed.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const Ctor = (window as any).ImageCapture as
+      | (new (track: MediaStreamTrack) => {
+          grabFrame: () => Promise<ImageBitmap>;
+        })
+      | undefined;
+    if (Ctor) {
+      bitmap = await new Ctor(track).grabFrame();
+    } else {
+      bitmap = await grabFrameViaVideo(stream);
+    }
+    if (!bitmap) return null;
+
+    // Stream resolution can differ from logical viewport pixels on
+    // HiDPI displays. Convert viewport-coord `cropRect` to stream-
+    // pixel coords using the actual frame size.
+    const frameW = bitmap.width;
+    const frameH = bitmap.height;
+    const scaleX = frameW / window.innerWidth;
+    const scaleY = frameH / window.innerHeight;
+    const sx = Math.max(0, Math.round(cropRect.x * scaleX));
+    const sy = Math.max(0, Math.round(cropRect.y * scaleY));
+    const sw = Math.min(frameW - sx, Math.round(cropRect.width * scaleX));
+    const sh = Math.min(frameH - sy, Math.round(cropRect.height * scaleY));
+
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
+    out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
+    const ctx = out.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, out.width, out.height);
+    bitmap.close?.();
+    return { dataUrl: out.toDataURL("image/png"), fresh };
+  } finally {
+    restoreOverlay();
+  }
+}
+
+/** Fallback frame grab via a hidden `<video>` + `drawImage` for
+ *  browsers without the `ImageCapture` API. */
+async function grabFrameViaVideo(stream: MediaStream): Promise<ImageBitmap> {
+  const video = document.createElement("video");
+  video.srcObject = stream;
+  video.muted = true;
+  video.playsInline = true;
+  video.style.position = "fixed";
+  video.style.pointerEvents = "none";
+  video.style.opacity = "0";
+  video.style.width = "1px";
+  video.style.height = "1px";
+  document.body.appendChild(video);
+  try {
+    await video.play().catch(() => undefined);
+    // Wait for a non-zero size before grabbing.
+    await new Promise<void>((resolve, reject) => {
+      const onReady = () => {
+        video.removeEventListener("loadeddata", onReady);
+        resolve();
+      };
+      video.addEventListener("loadeddata", onReady, { once: true });
+      setTimeout(() => reject(new Error("video timeout")), 2_000);
+    });
+    const tmp = document.createElement("canvas");
+    tmp.width = video.videoWidth;
+    tmp.height = video.videoHeight;
+    const ctx = tmp.getContext("2d");
+    if (!ctx) throw new Error("no 2d ctx");
+    ctx.drawImage(video, 0, 0);
+    return await createImageBitmap(tmp);
+  } finally {
+    video.remove();
+  }
+}
+
+// ---------------------------------------------------------------
+// Lifecycle hooks — auto-stop the stream when the user leaves.
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => stopDisplayMedia("pagehide"));
 }
 
 function elementFor(sel: SelectionInput): Element | null {
@@ -180,16 +538,14 @@ export async function buildBundle(
   const el = elementFor(sel);
   const rt = runtimeSnapshot();
   const dpr = window.devicePixelRatio || 1;
+  const settings = getCaptureSettings();
 
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
+
   if (el instanceof HTMLElement) {
-    // Walk up to a usefully-sized ancestor so the screenshot has
-    // enough visual context for a reviewer to recognise the bug
-    // (single letters or tiny icons in isolation are useless).
+    // 1. Compute crop region around a context-sized ancestor.
     const context = findContextAncestor(el);
-    // Clamp to the visible viewport — a context that extends off-
-    // screen would otherwise produce a crop that's mostly blank.
     const cr = context.getBoundingClientRect();
     const cropRect = new DOMRect(
       Math.max(0, cr.x),
@@ -197,49 +553,109 @@ export async function buildBundle(
       Math.min(window.innerWidth, cr.right) - Math.max(0, cr.x),
       Math.min(window.innerHeight, cr.bottom) - Math.max(0, cr.y),
     );
-    // Highlight the picked element so the reviewer can see exactly
-    // what was selected within the surrounding context. Inline
-    // outline wins against most stylesheets without !important.
+
+    // 2. Highlight the picked element so the reviewer can see exactly
+    // what was selected within the surrounding context.
     const orig = {
       outline: el.style.outline,
       outlineOffset: el.style.outlineOffset,
     };
     el.style.outline = "3px solid #ff6b00";
     el.style.outlineOffset = "2px";
+
     try {
-      const dataUrl = await renderViewportCrop(
-        cropRect,
-        // Cap pixel ratio for full-document rasterise — 2× of a
-        // long page is enough to blow per-tab canvas memory caps
-        // on some browsers (and 1.5× still looks crisp).
-        Math.min(dpr, 1.5),
-      );
-      if (!dataUrl || dataUrl.length < 1024) {
-        // Either the page has cross-origin media we had to filter
-        // out and the crop region was nothing but that, or the
-        // browser refused the size. Flag honestly.
-        const taint = crossOriginMediaReason(el);
-        screenshotUnavailable = taint
-          ? `${taint} — can't rasterise in-browser`
-          : "rasterise produced an empty image";
-      } else {
+      // 3. Decide which path to try first.
+      //    - alwaysPixelPerfect setting → skip layer 1, go straight
+      //      to display-media (if a stream is already active or the
+      //      user explicitly opted in).
+      //    - otherwise → layer 1 → assess → layer 2 if imperfect.
+      const skipLayer1 = settings.alwaysPixelPerfect;
+
+      let layer1Result: string | null = null;
+      let quality: QualityAssessment | null = null;
+
+      if (!skipLayer1) {
+        layer1Result = await renderViewportCrop(
+          cropRect,
+          Math.min(dpr, 1.5),
+        );
+        quality = assessCaptureQuality(cropRect);
+      }
+
+      const imperfect =
+        !layer1Result ||
+        (quality != null &&
+          (quality.unembeddableImages > 0 ||
+            quality.hasVideo ||
+            quality.hasCanvas));
+
+      if (imperfect || skipLayer1) {
+        // 4. Layer 2 — try `getDisplayMedia` for a pixel-perfect grab.
+        const grab = await tryGrabViaDisplayMedia(
+          cropRect,
+          Math.min(dpr, 2),
+        );
+        if (grab) {
+          screenshot = {
+            mime: "image/png",
+            dataUrl: grab.dataUrl,
+            bounds: {
+              x: cropRect.x,
+              y: cropRect.y,
+              width: cropRect.width,
+              height: cropRect.height,
+            },
+            source: "display-media",
+          };
+        } else if (layer1Result) {
+          // 5. Layer 3 — graceful degrade. Ship layer-1 result with
+          // an honest qualityNote so the dashboard can surface it.
+          const reason = quality
+            ? describeImperfection(quality)
+            : "non-CORS content";
+          screenshot = {
+            mime: "image/png",
+            dataUrl: layer1Result,
+            bounds: {
+              x: cropRect.x,
+              y: cropRect.y,
+              width: cropRect.width,
+              height: cropRect.height,
+            },
+            source: "rasterise",
+            qualityNote: `${reason} couldn't be embedded — grant tab capture for pixel-perfect screenshots`,
+          };
+        } else {
+          // Both paths failed — be honest.
+          screenshotUnavailable = supportsDisplayMedia()
+            ? "rasterise failed — grant tab capture for pixel-perfect screenshots"
+            : "rasterise failed and tab capture unsupported in this browser";
+        }
+      } else if (layer1Result) {
+        // Layer 1 was clean — ship it, no escalation needed.
         screenshot = {
           mime: "image/png",
-          dataUrl,
-          // Bounds describe the SCREENSHOT (the crop region) so
-          // the dashboard knows what slice of viewport this is.
+          dataUrl: layer1Result,
           bounds: {
             x: cropRect.x,
             y: cropRect.y,
             width: cropRect.width,
             height: cropRect.height,
           },
+          source: "rasterise",
         };
+      } else {
+        screenshotUnavailable = "rasterise produced an empty image";
       }
-    } catch {
-      screenshotUnavailable = "rasterise failed";
+    } catch (err) {
+      // Last-ditch — if something completely unexpected happened,
+      // still ship the bundle without a screenshot rather than
+      // failing the capture entirely.
+      screenshotUnavailable =
+        err instanceof Error
+          ? `rasterise failed: ${err.message}`
+          : "rasterise failed";
     } finally {
-      // Restore — even if rasterise threw.
       el.style.outline = orig.outline;
       el.style.outlineOffset = orig.outlineOffset;
     }

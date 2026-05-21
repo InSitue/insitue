@@ -18,7 +18,18 @@ import type {
 import { CompanionClient, type ConnState } from "./client.js";
 import { installRuntimeCollectors, runtimeErrorCount } from "./runtime.js";
 import { beginPick } from "./picker.js";
-import { buildBundle } from "./capture.js";
+import {
+  buildBundle,
+  onDisplayMediaChange,
+  retryDisplayMedia,
+  stopDisplayMedia,
+} from "./capture.js";
+import {
+  getCaptureSettings,
+  setCaptureSettings,
+  onCaptureSettingsChange,
+  type CaptureSettings,
+} from "./capture-settings.js";
 
 export interface InSitueOptions {
   port?: number;
@@ -146,6 +157,11 @@ function App(props: { port: number }) {
   const [showCtx, setShowCtx] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [autoApply, setAutoApply] = useState(false);
+  const [captureSettings, setCaptureSettingsState] = useState<CaptureSettings>(
+    getCaptureSettings(),
+  );
+  const [displayMediaActive, setDisplayMediaActive] = useState(false);
+  const [displayMediaDenied, setDisplayMediaDenied] = useState(false);
   const [agentReady, setAgentReady] = useState<boolean | null>(null);
   const [agentNote, setAgentNote] = useState("");
   const [chatInput, setChatInput] = useState("");
@@ -380,6 +396,22 @@ function App(props: { port: number }) {
     const el = threadRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, changes, turnBusy, activity]);
+
+  // Subscribe to capture-layer state — the pixel-perfect tab-share
+  // stream may be granted, denied, or auto-stopped (idle / pagehide
+  // / user-stopped). Mirror it into local state for the pill + nudge.
+  useEffect(() => {
+    const off1 = onDisplayMediaChange((active, reason) => {
+      setDisplayMediaActive(active);
+      if (reason === "denied") setDisplayMediaDenied(true);
+      if (reason === "granted") setDisplayMediaDenied(false);
+    });
+    const off2 = onCaptureSettingsChange((s) => setCaptureSettingsState(s));
+    return () => {
+      off1();
+      off2();
+    };
+  }, []);
 
   // ⌘K / Ctrl-K opens the panel and focuses the chat input;
   // Esc closes when the input is empty. Mirrors Cursor / Linear
@@ -1006,8 +1038,97 @@ function App(props: { port: number }) {
           { style: `color:${muted};margin-top:4px` },
           "Writes proposed changes immediately. Still checkpointed & undoable; no manual gate. Resets on reload.",
         ),
+        h(
+          "label",
+          {
+            style:
+              "display:flex;gap:8px;align-items:center;cursor:pointer;color:#ececef;margin-top:10px",
+          },
+          [
+            h("input", {
+              type: "checkbox",
+              checked: captureSettings.alwaysPixelPerfect,
+              onChange: (ev: Event) =>
+                setCaptureSettings({
+                  alwaysPixelPerfect: (ev.target as HTMLInputElement).checked,
+                }),
+            }),
+            h("span", {}, "Always pixel-perfect screenshots"),
+          ],
+        ),
+        h(
+          "div",
+          { style: `color:${muted};margin-top:4px` },
+          "Skips the silent rasterise path and always uses tab capture. One permission per session; every screenshot is OS-pixel accurate.",
+        ),
       ])
     : null;
+
+  // Pill shown only while a getDisplayMedia stream is live — gives
+  // the user a clear "this is what the red browser indicator means"
+  // affordance + an explicit Stop. Otherwise the red icon is opaque.
+  const captureActivePill = displayMediaActive
+    ? h(
+        "div",
+        {
+          style:
+            "display:flex;align-items:center;gap:8px;padding:6px 10px;margin:6px 0;border-radius:4px;background:#1a2a1f;border:1px solid #2f5040;color:#9fe7b8;font-size:11px",
+        },
+        [
+          h(
+            "span",
+            { style: "display:inline-flex;align-items:center;gap:6px" },
+            [
+              h("span", {
+                style:
+                  "width:8px;height:8px;border-radius:50%;background:#2fd16b;box-shadow:0 0 6px #2fd16b",
+              }),
+              h("span", {}, "Tab capture active"),
+            ],
+          ),
+          h(
+            "button",
+            {
+              style: `${btn};margin-left:auto`,
+              onClick: () => stopDisplayMedia("user"),
+              title: "Stop sharing this tab",
+            },
+            "Stop",
+          ),
+        ],
+      )
+    : null;
+
+  // Nudge shown if a recent capture needed pixel-perfect mode but
+  // the user declined. Stays until the next successful capture or
+  // explicit retry.
+  const captureDeniedNudge =
+    displayMediaDenied && !displayMediaActive
+      ? h(
+          "div",
+          {
+            style:
+              "display:flex;align-items:center;gap:8px;padding:6px 10px;margin:6px 0;border-radius:4px;background:#2a1f1a;border:1px solid #5a3a2a;color:#e8c69f;font-size:11px",
+          },
+          [
+            h(
+              "span",
+              { style: "flex:1" },
+              "Screenshot missed some cross-origin content. Grant tab capture for pixel-perfect captures.",
+            ),
+            h(
+              "button",
+              {
+                style: btn,
+                onClick: () => {
+                  void retryDisplayMedia();
+                },
+              },
+              "Enable",
+            ),
+          ],
+        )
+      : null;
 
   const panel = open
     ? h(
@@ -1068,6 +1189,8 @@ function App(props: { port: number }) {
             ],
           ),
           settings,
+          captureActivePill,
+          captureDeniedNudge,
           ctx,
           conversation,
           timeline,

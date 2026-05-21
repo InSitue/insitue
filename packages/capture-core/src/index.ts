@@ -12,8 +12,10 @@
  */
 
 /** Bump when `CaptureBundle`'s shape changes; sinks branch on it.
- *  v2: additive `screenshotUnavailable` (M5 — honest screenshots). */
-export const CAPTURE_SCHEMA_VERSION = 2 as const;
+ *  v2: additive `screenshotUnavailable` (M5 — honest screenshots).
+ *  v3: additive `screenshot.source` + `screenshot.qualityNote`
+ *      (pixel-perfect layered capture — rasterise vs display-media). */
+export const CAPTURE_SCHEMA_VERSION = 3 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
  *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3).
  *  v4: agent-activity (M6 — live "what it's doing" feedback). */
@@ -89,6 +91,15 @@ export interface CaptureBundle {
     mime: "image/png";
     dataUrl: string;
     bounds: { x: number; y: number; width: number; height: number };
+    /** Which capture path produced this screenshot. `rasterise` =
+     *  html-to-image full-document render + crop (no permission).
+     *  `display-media` = `getDisplayMedia` OS-compositor capture (one
+     *  permission per session, pixel-perfect across any content). */
+    source?: "rasterise" | "display-media";
+    /** Human-readable note when the capture is structurally complete
+     *  but visually imperfect — e.g. some non-CORS images fell back
+     *  to a placeholder because the user declined `getDisplayMedia`. */
+    qualityNote?: string;
   };
   /** Set (and `screenshot` omitted) when an in-browser rasterise was
    *  impossible — e.g. cross-origin media taints the canvas. Honest
@@ -163,7 +174,13 @@ export function toIssueDraft(bundle: CaptureBundle): IssueDraft {
       `${bundle.runtime.network.length} net · ${errs} err`,
     `**Screenshot:** ${
       bundle.screenshot
-        ? "attached"
+        ? `attached` +
+          (bundle.screenshot.source
+            ? ` (${bundle.screenshot.source})`
+            : "") +
+          (bundle.screenshot.qualityNote
+            ? ` — ${bundle.screenshot.qualityNote}`
+            : "")
         : bundle.screenshotUnavailable
           ? `unavailable — ${bundle.screenshotUnavailable}`
           : "—"
