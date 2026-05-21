@@ -71,6 +71,51 @@ function diffLines(diff: string) {
   });
 }
 
+/** Render an agent message body with fenced ``` code blocks
+ *  styled as monospace cards. No syntax highlighting in v1 —
+ *  keeps the bundle small; visual separation alone is the win.
+ *  Plain text segments preserve whitespace via `pre-wrap`. */
+function renderMessageBody(text: string) {
+  // Split on lines that are just ``` (with optional language tag).
+  // Odd-indexed segments after split are the code-block bodies.
+  const parts: { code: boolean; lang: string; text: string }[] = [];
+  const lines = text.split("\n");
+  let buf: string[] = [];
+  let inCode = false;
+  let lang = "";
+  const flush = () => {
+    if (buf.length === 0) return;
+    parts.push({ code: inCode, lang, text: buf.join("\n") });
+    buf = [];
+  };
+  for (const line of lines) {
+    const fence = /^```(\w*)\s*$/.exec(line);
+    if (fence) {
+      flush();
+      inCode = !inCode;
+      lang = inCode ? (fence[1] ?? "") : "";
+      continue;
+    }
+    buf.push(line);
+  }
+  flush();
+  return parts.map((p) =>
+    p.code
+      ? h(
+          "div",
+          {
+            style: `${card};padding:8px;margin:4px 0;font:${mono};color:#ececef;overflow-x:auto;white-space:pre`,
+          },
+          p.text,
+        )
+      : h(
+          "div",
+          { style: "white-space:pre-wrap;word-break:break-word" },
+          p.text,
+        ),
+  );
+}
+
 function diffBlock(changes: Change[]) {
   return changes.map((c) =>
     h("div", { style: "margin:6px 0" }, [
@@ -129,6 +174,9 @@ function App(props: { port: number }) {
   const changesRef = useRef<Change[]>([]);
   const activeTurnRef = useRef<typeof activeTurn>(null);
   const threadRef = useRef<HTMLDivElement | null>(null);
+  // For the ⌘K shortcut — needs to find the textarea even when
+  // the panel is collapsed. Set on the panel root below.
+  const panelRef = useRef<HTMLDivElement | null>(null);
   autoApplyRef.current = autoApply;
   changesRef.current = changes;
   activeTurnRef.current = activeTurn;
@@ -291,6 +339,29 @@ function App(props: { port: number }) {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, changes, turnBusy, activity]);
 
+  // ⌘K / Ctrl-K opens the panel and focuses the chat input;
+  // Esc closes when the input is empty. Mirrors Cursor / Linear
+  // / Claude Desktop muscle memory.
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      const meta = ev.metaKey || ev.ctrlKey;
+      if (meta && ev.key === "k") {
+        ev.preventDefault();
+        setOpen(true);
+        setTimeout(() => {
+          const ta = panelRef.current?.querySelector(
+            "textarea",
+          ) as HTMLTextAreaElement | null;
+          ta?.focus();
+        }, 0);
+      } else if (ev.key === "Escape" && open && !chatInput.trim()) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, chatInput]);
+
   const captureSel = async (sel: SelectionInput) => {
     setLastSel(sel);
     const b = await buildBundle(sel);
@@ -317,9 +388,34 @@ function App(props: { port: number }) {
   };
 
   const sendChat = () => {
-    if (!client || !bundle || !chatInput.trim() || turnBusy) return;
-    const turnId = bundle.id; // events key by bundle id
+    if (!client || !chatInput.trim() || turnBusy) return;
     const text = chatInput.trim();
+    // Slash commands — local, no agent round-trip. Matches the
+    // Claude / Cursor convention (`/clear`, `/undo`, `/commit`).
+    if (text.startsWith("/")) {
+      const [cmd, ...rest] = text.split(/\s+/);
+      if (cmd === "/clear") {
+        setMessages([]);
+        setChatInput("");
+        return;
+      }
+      if (cmd === "/undo") {
+        // Undo the most recent applied turn from history if any.
+        const top = history.find((h) => h.status === "applied");
+        if (top) client.sendUndo(top.turnId);
+        setChatInput("");
+        return;
+      }
+      if (cmd === "/commit") {
+        const msg = rest.join(" ") || "Apply InSitue session changes";
+        client.sendCommitSession(msg);
+        setChatInput("");
+        return;
+      }
+      // Unknown command — keep as plain text so the agent sees it.
+    }
+    if (!bundle) return;
+    const turnId = bundle.id; // events key by bundle id
     setActiveTurn({ turnId, prompt: text, sel: lastSel });
     setMessages((ms) => [...ms, { role: "user", text }]);
     setChatInput("");
@@ -495,16 +591,33 @@ function App(props: { port: number }) {
       style: `max-height:300px;overflow:auto;margin:6px 0;display:flex;flex-direction:column;gap:6px`,
     },
     [
-      ...messages.map((m) =>
+      ...messages.map((m, i) =>
         h(
           "div",
           {
             style:
               m.role === "user"
-                ? `align-self:flex-end;max-width:88%;${card};border-color:#2e2e3c;padding:6px 8px;color:#ececef;white-space:pre-wrap;word-break:break-word`
-                : `align-self:flex-start;max-width:96%;padding:6px 8px;color:#ececef;white-space:pre-wrap;word-break:break-word`,
+                ? `align-self:flex-end;max-width:88%;${card};border-color:#2e2e3c;padding:6px 8px;color:#ececef;white-space:pre-wrap;word-break:break-word;cursor:pointer`
+                : `align-self:flex-start;max-width:96%;padding:6px 8px;color:#ececef`,
+            // Click any prior user message to re-populate the
+            // input — matches Claude.ai / Cursor edit-and-retry.
+            // The original turn stays in the thread; sending
+            // creates a new turn.
+            onClick:
+              m.role === "user"
+                ? () => {
+                    setChatInput(m.text);
+                    setTimeout(() => {
+                      const ta = panelRef.current?.querySelector(
+                        "textarea",
+                      ) as HTMLTextAreaElement | null;
+                      ta?.focus();
+                    }, 0);
+                  }
+                : undefined,
+            title: m.role === "user" ? "click to edit + retry" : undefined,
           },
-          m.text,
+          m.role === "agent" ? renderMessageBody(m.text) : m.text,
         ),
       ),
       thinking && turnBusy
@@ -655,8 +768,8 @@ function App(props: { port: number }) {
             h("textarea", {
               value: chatInput,
               placeholder: messages.length
-                ? "reply… (the agent remembers this thread)"
-                : "what does this do? · make the padding bigger · fix this bug",
+                ? "reply… (the agent remembers this thread) · /undo /clear /commit"
+                : "what does this do? · make the padding bigger · fix this bug · ⌘K to focus",
               rows: 2,
               onInput: (ev: Event) =>
                 setChatInput((ev.target as HTMLTextAreaElement).value),
@@ -858,6 +971,7 @@ function App(props: { port: number }) {
     ? h(
         "div",
         {
+          ref: panelRef,
           style: {
             position: "fixed",
             bottom: "64px",
