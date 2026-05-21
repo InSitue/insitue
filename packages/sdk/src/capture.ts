@@ -142,61 +142,23 @@ async function renderViewportCrop(
   const ctx = out.getContext("2d");
   if (!ctx) return { dataUrl: null, failedImages };
 
-  // 1. Manual <img> compositing FIRST.
-  //
-  // html-to-image's foreignObject pipeline reliably drops
-  // absolutely-positioned `<img>` elements with `srcset` (the
-  // `next/image` `fill` pattern). Even our own `drawImage(liveImg,
-  // …)` produces pure-black pixels for the live element on
-  // minimecha — Next dev's image pipeline leaves the live img's
-  // bitmap inaccessible to canvas (verified via Playwright on the
-  // dogfood page 2026-05-21; live draw → uniform 0,0,0; fresh
-  // `Image()` with `crossOrigin="anonymous"` loading the same URL
-  // → real image pixels).
-  //
-  // So we re-fetch each img through a fresh `Image` with CORS,
-  // and draw THAT. Doesn't touch the live DOM (no flash), uses
-  // the browser's HTTP cache so it's usually instant, and the
-  // bitmap is guaranteed canvas-paintable. Then we filter those
-  // imgs out of the html-to-image render so it composites
-  // text/UI on top of our image layer cleanly.
-  //
-  // Limitation: only absolute/fixed-positioned imgs. Inline imgs
-  // still go through html-to-image's normal path — they
-  // contribute to layout and html-to-image handles them fine for
-  // CORS-friendly sources. Cross-origin imgs without server CORS
-  // headers will fail the fresh-load → skipped + flagged for
-  // layer-2 escalation.
-  const drawnImgs = await drawAbsoluteImagesOnto(
-    ctx,
-    cropRect,
-    pixelRatio,
-    failedImages,
-  );
-
-  // 2. html-to-image render with the manually-drawn imgs filtered
-  //    out. Their pixels are already on `ctx`; the UI layer on top
-  //    is transparent where they were, so the composite preserves
-  //    them.
+  // 1. html-to-image renders the document. For
+  //    absolutely-positioned <img>s (the next/image fill pattern)
+  //    its foreignObject pipeline drops the image and shows the
+  //    parent's background instead. We'll patch over that next.
   const fullCanvas = await toCanvas(document.documentElement, {
     pixelRatio,
     cacheBust: true,
     backgroundColor,
     imagePlaceholder: IMAGE_PLACEHOLDER,
-    filter: (n) => {
-      if (n instanceof Element && n.closest?.("#insitu-root, [data-insitu-layer]")) {
-        return false;
-      }
-      if (n instanceof HTMLImageElement && drawnImgs.has(n)) {
-        return false;
-      }
-      return true;
-    },
+    filter: (n) =>
+      !(
+        n instanceof Element &&
+        n.closest?.("#insitu-root, [data-insitu-layer]")
+      ),
   });
 
-  // 3. Composite the UI layer on top of our image layer. Default
-  //    `source-over` means transparent UI pixels (where filtered
-  //    imgs were) leave the underlying image pixels intact.
+  // 2. Composite html-to-image output onto our crop canvas.
   const sx = window.scrollX;
   const sy = window.scrollY;
   ctx.drawImage(
@@ -210,12 +172,43 @@ async function renderViewportCrop(
     out.width,
     out.height,
   );
+
+  // 3. Manual <img> overlay — paint absolutely-positioned imgs on
+  //    TOP, replacing the empty/parent-bg areas html-to-image left
+  //    behind. Verified end-to-end on minimecha's HubHero via
+  //    Playwright (2026-05-21).
+  //
+  //    Two failure modes the fresh-load + CORS draw handles:
+  //     - `drawImage(liveImg, …)` on a next/image element paints
+  //       pure black (Next dev's image pipeline leaves the live
+  //       img's bitmap inaccessible to canvas — verified).
+  //     - html-to-image's clone drops the same imgs entirely
+  //       (foreignObject layout breaks position:absolute +
+  //       aspect-ratio + object-fit combos).
+  //    The fresh `Image` with `crossOrigin="anonymous"` re-fetches
+  //    via the standard pipeline (HTTP-cached) and produces a
+  //    paintable bitmap.
+  //
+  //    Z-order trade-off: imgs paint AFTER UI/text, so any text
+  //    overlay positioned ABOVE the img bbox gets covered. Common
+  //    on hero patterns (text-on-image). The trade-off is
+  //    deliberate — having the image visible matters more than
+  //    perfect text-over-image z-order for a bug-report capture.
+  //    Users who need pixel-perfect z-order should opt into
+  //    `defaultPixelPerfect` (getDisplayMedia, no compromises).
+  const drawnImgs = await drawAbsoluteImagesOnto(
+    ctx,
+    cropRect,
+    pixelRatio,
+    failedImages,
+  );
+  void drawnImgs; // Used to satisfy the type — flagged imgs are
+  // collected via the `failedImages` set, which `assessCaptureQuality`
+  // reads after the rasterise.
+
   if (looksBlankUniform(ctx, out.width, out.height)) {
     return { dataUrl: null, failedImages };
   }
-  // Post-render verification — flags any imgs we DIDN'T handle
-  // manually (inline imgs that html-to-image silently dropped).
-  // Triggers layer-2 escalation for those cases.
   detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
   return { dataUrl: out.toDataURL("image/png"), failedImages };
 }
