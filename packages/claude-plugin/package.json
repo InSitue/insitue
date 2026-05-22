@@ -1,6 +1,6 @@
 {
   "name": "@insitue/claude-plugin",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Drive a Claude Code session from the InSitue browser overlay — pick an element in your app, claude reads the file and proposes the edit.",
   "license": "MIT",
   "type": "module",

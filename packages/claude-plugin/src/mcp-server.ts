@@ -398,7 +398,19 @@ if (!session) {
   process.stderr.write(
     "[insitue-mcp] no companion available — `next_pick` will time out.\n",
   );
-} else {
+}
+
+// Lazy CLI-subscriber attach. We only join the companion's
+// subscriber set when the user actually invokes /insitue:connect
+// (which kicks off list_recent_picks + next_pick). Attaching on
+// MCP boot would light up the browser launcher's "active" purple
+// state the instant `claude` is open, even though the user hasn't
+// asked for InSitue picks yet — misleading. Lazy attach keeps the
+// launcher muted until there's a real listener.
+let attached = false;
+function ensureSubscriberAttached(): void {
+  if (attached || !session) return;
+  attached = true;
   connectToCompanion(session);
 }
 
@@ -430,6 +442,7 @@ server.registerTool(
     },
   },
   async ({ timeout_ms }) => {
+    ensureSubscriberAttached();
     const ms = timeout_ms ?? NEXT_PICK_DEFAULT_TIMEOUT_MS;
     const pick = await buffer.next(ms);
     if (!pick) {
@@ -469,6 +482,7 @@ server.registerTool(
     },
   },
   async ({ limit }) => {
+    ensureSubscriberAttached();
     const picks = buffer.recent(limit ?? 10);
     return {
       content: [
