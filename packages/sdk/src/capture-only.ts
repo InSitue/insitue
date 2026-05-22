@@ -221,6 +221,129 @@ interface AppProps {
   onCapture?: CaptureOnlyOptions["onCapture"];
 }
 
+/** Setup callout shown when the user clicks the muted dev launcher.
+ *  Two flavours: companion-not-reachable vs companion-reachable-but-
+ *  no-CLI-attached. Both end at the same place: "run /insitue:connect
+ *  in claude". */
+function offlineHelpCard(
+  reason: "companion" | "subscriber",
+  onClose: () => void,
+) {
+  const ink = "#ececef";
+  const sub = "#a0a0aa";
+  const faint = "#6b6b75";
+  const line = "#26262d";
+  const surface = "#13131a";
+  const accent = "#5751e6";
+  const mono =
+    'ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace';
+  const sans =
+    '-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,"Helvetica Neue",Arial,sans-serif';
+  const title =
+    reason === "companion"
+      ? "Open claude to activate InSitue"
+      : "Attach claude to start picking";
+  const lead =
+    reason === "companion"
+      ? "The local companion isn't reachable yet. Open a terminal in this project and start claude."
+      : "The companion is running, but no claude session is listening. Run the slash command below to attach.";
+  const step1 =
+    reason === "companion"
+      ? "In your project directory, run:"
+      : "In your existing claude session, run:";
+  const cmd1 = reason === "companion" ? "claude" : "/insitue:connect";
+  const step2 =
+    reason === "companion" ? "Then inside claude, run:" : null;
+  const cmd2 = reason === "companion" ? "/insitue:connect" : null;
+  const code = (s: string) =>
+    h(
+      "code",
+      {
+        style: `display:inline-block;font:600 12.5px/1.4 ${mono};color:${ink};background:#0c0c11;border:1px solid ${line};padding:6px 10px;border-radius:6px`,
+      },
+      s,
+    );
+  return h(
+    "div",
+    {
+      style: `width:300px;font:13px/1.5 ${sans};color:${ink};background:${surface};border:1px solid ${line};border-radius:14px;box-shadow:0 14px 44px rgba(0,0,0,.55),0 2px 10px rgba(0,0,0,.35);overflow:hidden`,
+    },
+    [
+      h(
+        "div",
+        {
+          style: `display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 16px 10px`,
+        },
+        [
+          h(
+            "div",
+            { style: "display:flex;align-items:center;gap:9px" },
+            [
+              h("span", {
+                style: `width:9px;height:9px;border-radius:3px;background:${accent};box-shadow:0 1px 4px rgba(91,91,240,.4)`,
+              }),
+              h(
+                "span",
+                {
+                  style: `font-weight:680;font-size:13.5px;letter-spacing:-.01em;color:${ink}`,
+                },
+                title,
+              ),
+            ],
+          ),
+          h(
+            "button",
+            {
+              onClick: onClose,
+              style: `all:unset;cursor:pointer;color:${faint};font-size:18px;line-height:1;padding:2px 6px;border-radius:6px`,
+              title: "Dismiss",
+            },
+            "×",
+          ),
+        ],
+      ),
+      h(
+        "div",
+        { style: `padding:0 16px 14px;color:${sub}` },
+        [
+          h("p", { style: "margin:0 0 12px" }, lead),
+          h(
+            "div",
+            { style: "display:flex;flex-direction:column;gap:8px" },
+            [
+              h(
+                "div",
+                {
+                  style: `font-size:11.5px;color:${faint};letter-spacing:.04em;text-transform:uppercase;font-weight:600`,
+                },
+                step1,
+              ),
+              code(cmd1),
+              step2
+                ? h(
+                    "div",
+                    {
+                      style: `margin-top:6px;font-size:11.5px;color:${faint};letter-spacing:.04em;text-transform:uppercase;font-weight:600`,
+                    },
+                    step2,
+                  )
+                : null,
+              cmd2 ? code(cmd2) : null,
+            ],
+          ),
+          h(
+            "p",
+            {
+              style: `margin:14px 0 0;font-size:12px;color:${faint}`,
+            },
+            "Don't have the plugin? Run /plugin marketplace add InSitue/insitue in claude, then /plugin install insitue.",
+          ),
+        ],
+      ),
+    ],
+  );
+}
+
 function CaptureApp(props: AppProps) {
   const isDev = props.sink.kind === "companion";
   const C = isDev ? DEV : CLOUD;
@@ -234,6 +357,14 @@ function CaptureApp(props: AppProps) {
     isDev ? "connecting" : "idle",
   );
   const [companionDetail, setCompanionDetail] = useState<string>("");
+  // Number of CLI/MCP subscribers attached to the companion right
+  // now. Drives the "active" purple state of the dev launcher —
+  // the companion being up isn't enough; we want claude (or another
+  // CLI subscriber) to actually be listening before signalling
+  // "I'm live". `subscribers-attached` is pushed by the companion
+  // whenever the set changes.
+  const [subscriberCount, setSubscriberCount] = useState(0);
+  const [showOfflineHelp, setShowOfflineHelp] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   // ── Companion connection (dev sink only).
@@ -253,6 +384,7 @@ function CaptureApp(props: AppProps) {
         onState: (s, detail) => {
           setCompanionState(s);
           if (detail) setCompanionDetail(detail);
+          if (s !== "connected") setSubscriberCount(0);
           // Auto-reconnect on disconnect: simple linear backoff,
           // capped — the companion legitimately restarts (manual
           // stop, MCP shutdown), so we want to recover whenever
@@ -263,6 +395,7 @@ function CaptureApp(props: AppProps) {
             }
           }
         },
+        onSubscribersAttached: (count) => setSubscriberCount(count),
       });
       companionRef.current = c;
       void c.connect();
@@ -439,52 +572,83 @@ function CaptureApp(props: AppProps) {
   // ── launcher ──
   if (phase === "idle" || phase === "picking") {
     const picking = phase === "picking";
-    const offline = isDev && companionState !== "connected";
+    // "active" = a CLI/MCP subscriber (claude with
+    // /insitue:connect open) is currently attached to the
+    // companion. The companion being merely *running* isn't enough
+    // — the autospawn means it's up the moment `claude` is open,
+    // even before the user invokes /insitue:connect. Without the
+    // subscriber-count gate the purple state would light up the
+    // instant claude boots, which lies about whether picks will
+    // actually be acted on.
+    const active = isDev && companionState === "connected" && subscriberCount > 0;
+    const muted = isDev && !active;
 
     // Dev launcher: same circular pill shape as cloud, minus the
-    // label. Two visual states the developer can read at a glance:
+    // label. Three visual states the developer can read at a
+    // glance:
     //
-    //   - Offline (companion not running) → muted: dark surface
-    //     container with a grey inner dot. "Nothing's listening."
-    //   - Connected (claude attached via /insitue:connect) → the
+    //   - Muted (companion offline OR no CLI attached) → dark
+    //     surface container with a grey inner dot. "Nothing's
+    //     listening yet." Clicking opens the setup callout.
+    //   - Active (claude attached via /insitue:connect) → the
     //     whole button fills with the cloud-accent purple. The
     //     inner dot inverts to white. Brand-coloured "I'm live."
-    //
-    // Picking adds a soft pulse on the inner dot.
+    //   - Picking → active styling + pulsing inner dot.
     if (isDev) {
-      const containerBg = offline ? C.surface : CLOUD.accentSolid;
-      const containerBorder = offline
+      const containerBg = muted ? C.surface : CLOUD.accentSolid;
+      const containerBorder = muted
         ? `1px solid ${C.line}`
         : "1px solid transparent";
-      const containerShadow = offline
+      const containerShadow = muted
         ? C.shadow
         : `0 0 0 4px rgba(91,91,240,.16),0 12px 30px rgba(60,55,200,.42)`;
-      const innerBg = offline ? "#9a9aa4" : "#ffffff";
-      const innerShadow = offline
-        ? "none"
-        : "0 1px 3px rgba(0,0,0,.20)";
+      const innerBg = muted ? "#9a9aa4" : "#ffffff";
+      const innerShadow = muted ? "none" : "0 1px 3px rgba(0,0,0,.20)";
+      const onClickLauncher = picking
+        ? undefined
+        : muted
+          ? () => setShowOfflineHelp((v) => !v)
+          : () => void startPick();
+      const tooltip = picking
+        ? "Click an element · Esc to cancel"
+        : muted
+          ? "InSitue is muted — click for setup"
+          : "Pick an element to talk to claude about";
       return h(
-        "button",
+        "div",
         {
-          onClick: picking ? undefined : () => void startPick(),
-          style: `all:unset;position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${containerBg};border:${containerBorder};border-radius:50%;box-shadow:${containerShadow};transition:background .18s ease,box-shadow .18s ease`,
-          title: picking
-            ? "Click an element · Esc to cancel"
-            : offline
-              ? "InSitue companion not running — start `claude` with /insitue:connect"
-              : "Pick an element to talk to claude about",
+          style:
+            "position:fixed;bottom:20px;right:20px;z-index:2147483000;display:flex;flex-direction:column;align-items:flex-end;gap:12px",
         },
         [
-          h("span", {
-            style: `width:11px;height:11px;border-radius:3px;background:${innerBg};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
-          }),
-          picking
-            ? h(
-                "style",
-                {},
-                "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
+          showOfflineHelp && muted
+            ? offlineHelpCard(
+                companionState === "connected"
+                  ? "subscriber"
+                  : "companion",
+                () => setShowOfflineHelp(false),
               )
             : null,
+          h(
+            "button",
+            {
+              onClick: onClickLauncher,
+              style: `all:unset;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${containerBg};border:${containerBorder};border-radius:50%;box-shadow:${containerShadow};transition:background .18s ease,box-shadow .18s ease`,
+              title: tooltip,
+            },
+            [
+              h("span", {
+                style: `width:11px;height:11px;border-radius:3px;background:${innerBg};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
+              }),
+              picking
+                ? h(
+                    "style",
+                    {},
+                    "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
+                  )
+                : null,
+            ],
+          ),
         ],
       );
     }
