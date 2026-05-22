@@ -1,17 +1,29 @@
 ---
-description: Drive this Claude Code session from the InSitue browser overlay — pick + describe in the browser, claude acts in the terminal.
+description: Drive this Claude session (Code or Desktop) from the InSitue browser overlay — pick + describe in the browser, claude acts here.
 ---
 
-# /insitue:connect
+# InSitue session
 
-Connects this session to the local InSitue companion. The user
-picks an element in their app, types a description in the
-InSitue panel, clicks Send — and you receive the pick (file,
-line, component, screenshot) plus the description here, ready to
-act on.
+This is the operating manual the InSitue MCP loads at session
+start. On Claude Code it lands as the `/insitue:connect` slash
+command; on Claude Desktop the user has claude call the
+`start_session` tool to fetch the same content. Either way, the
+instructions below are how you behave for the rest of the chat.
+
+The user picks an element in their running app, types a
+description in the InSitue panel, clicks Send — and you receive
+the pick (file, line, component, screenshot) plus the
+description here, ready to act on.
 
 The companion auto-starts when this MCP server boots. You do
 not need to ask the user to run any extra commands.
+
+**Runtime note.** Where this manual says "use the Edit tool",
+that means:
+  - on **Claude Code** → the built-in Edit/Write/Read tools
+  - on **Claude Desktop** → the `apply_edit` / `write_file` /
+    `read_file` tools exposed by this same MCP server
+Either path is fine; pick whichever your runtime has.
 
 ## Your behaviour
 
@@ -53,8 +65,8 @@ not need to ask the user to run any extra commands.
    - Propose the edit with a clear diff in this chat. Wait for
      the user to say "yes" / "approve" / "go" before writing.
      Don't auto-apply.
-   - On approval, write with the Edit tool. Confirm what
-     changed.
+   - On approval, write with the Edit tool (Code) or
+     `mcp__insitue__apply_edit` (Desktop). Confirm what changed.
    - Loop back to `next_pick`.
 3. If `next_pick` returns `status: "timeout"`, the user simply
    hasn't picked anything yet. Stay quiet and call `next_pick`

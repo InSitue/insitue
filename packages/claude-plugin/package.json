@@ -1,7 +1,7 @@
 {
   "name": "@insitue/claude-plugin",
-  "version": "0.3.3",
-  "description": "Drive a Claude Code session from the InSitue browser overlay — pick an element in your app, claude reads the file and proposes the edit.",
+  "version": "0.4.0",
+  "description": "Drive Claude (Code AND Desktop) from the InSitue browser overlay — pick an element in your app, claude reads the file and proposes the edit.",
   "license": "MIT",
   "type": "module",
   "files": [
@@ -14,11 +14,12 @@
     ".": "./dist/mcp-server.js"
   },
   "bin": {
-    "insitue-mcp": "./dist/mcp-server.js"
+    "insitue-mcp": "./dist/mcp-server.js",
+    "insitue": "./dist/setup-cli.js"
   },
   "scripts": {
-    "build": "tsup src/mcp-server.ts --format esm --clean --external @modelcontextprotocol/sdk --external ws --external zod",
-    "dev": "tsup src/mcp-server.ts --format esm --watch --external @modelcontextprotocol/sdk --external ws --external zod",
+    "build": "tsup src/mcp-server.ts src/setup-cli.ts --format esm --clean --external @modelcontextprotocol/sdk --external ws --external zod",
+    "dev": "tsup src/mcp-server.ts src/setup-cli.ts --format esm --watch --external @modelcontextprotocol/sdk --external ws --external zod",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit"
   },

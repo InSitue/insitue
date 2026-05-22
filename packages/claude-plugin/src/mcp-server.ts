@@ -1,17 +1,30 @@
 #!/usr/bin/env node
 /**
- * InSitue MCP bridge — connects a `claude` session to the local
- * InSitue companion's pick stream so users can drive Claude Code
- * FROM the browser overlay instead of typing file/line by hand.
+ * InSitue MCP bridge — connects a `claude` session (Code OR Desktop)
+ * to the local InSitue companion's pick stream so users can drive
+ * the agent FROM the browser overlay instead of typing file/line
+ * by hand.
  *
- * Lifecycle (per claude session):
+ * Runtimes:
+ *   - Claude Code: installed via the marketplace plugin
+ *     (`InSitue/insitue` → `insitue@insitue-plugins`). Plugin.json
+ *     pins `cwd: ${CLAUDE_PROJECT_DIR}`; slash command
+ *     `/insitue:connect` kicks off the loop.
+ *   - Claude Desktop: configured via
+ *     `claude_desktop_config.json` with
+ *     `INSITUE_PROJECT_DIR` env var (or a `--project-dir` arg).
+ *     The user opens a new chat and tells claude to call
+ *     `start_session` — same instructions, no slash commands
+ *     required.
  *
- *   1. MCP server boots inside `${CLAUDE_PROJECT_DIR}` (declared by
- *      plugin.json's `cwd: "${CLAUDE_PROJECT_DIR}"`).
+ * Lifecycle:
+ *
+ *   1. Resolve the project dir (argv → INSITUE_PROJECT_DIR →
+ *      CLAUDE_PROJECT_DIR → walk-up for .insitue/ → walk-up for
+ *      package.json → cwd). See `project-dir.ts`.
  *   2. `ensureCompanion()` checks for an existing companion at
- *      `.insitue/session.json`. If one is alive on its port, reuse
- *      it (the user might've run `insitue dev` themselves and we
- *      don't want to fight them). Otherwise spawn one via
+ *      `<projectDir>/.insitue/session.json`. If one is alive on
+ *      its port, reuse it. Otherwise spawn one via
  *      `npx -y @insitue/companion@latest dev` as a child process,
  *      poll for the new session.json, and connect.
  *   3. Spawned children are killed cleanly on `process.exit` and
@@ -20,22 +33,38 @@
  *      in-memory `PickBuffer`. `next_pick` long-polls; claude calls
  *      it in a loop.
  *
- * Picks arrive complete: target, source, screenshot, AND
- * `userNote` (the user's typed description) are all in the same
- * bundle. The widget now defers the broadcast until the user
- * clicks Send, so there's no async join logic on this side.
+ * Tools exposed:
+ *   - start_session     (instructions + state — Desktop entry point)
+ *   - list_recent_picks (catch up on buffered picks)
+ *   - next_pick         (long-poll for the next pick)
+ *   - diagnose          (health check)
+ *   - read_file         (project-scoped file read — Desktop fallback)
+ *   - apply_edit        (project-scoped string replacement)
+ *   - write_file        (project-scoped full-file write)
+ *
+ * Prompts: `connect` (the same operating instructions).
+ * Resources: `insitue://instructions`, `insitue://readme`.
  *
  * Hard rules: loopback-only, token-auth via `.insitue/session.json`,
- * never writes files (claude does, via its native Edit tool).
+ * file tools are scoped to the resolved project dir.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { z } from "zod";
+import { diagnose } from "./diagnose.js";
+import {
+  applyEditInProject,
+  readFileInProject,
+  writeFileInProject,
+} from "./file-tools.js";
+import { loadInstructions } from "./instructions.js";
+import { resolveProjectDir } from "./project-dir.js";
 
 interface SessionFile {
   token: string;
@@ -83,27 +112,22 @@ const MAX_BUFFERED_PICKS = 32;
 const NEXT_PICK_DEFAULT_TIMEOUT_MS = 25 * 1000;
 const NEXT_PICK_MAX_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Walk up from `start` looking for `.insitue/session.json`. */
-function findSession(start = process.cwd()): {
+/** Load the session file from the resolved project dir. No walk-up
+ *  needed — `resolveProjectDir()` already picked our anchor; we
+ *  just look in its `.insitue/` subdirectory. */
+function findSession(projectDir: string): {
   dir: string;
   session: SessionFile;
 } | null {
-  let dir = resolve(start);
-  while (true) {
-    const candidate = join(dir, ".insitue", "session.json");
-    if (existsSync(candidate)) {
-      try {
-        const session = JSON.parse(
-          readFileSync(candidate, "utf8"),
-        ) as SessionFile;
-        return { dir, session };
-      } catch {
-        return null;
-      }
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
+  const candidate = join(projectDir, ".insitue", "session.json");
+  if (!existsSync(candidate)) return null;
+  try {
+    const session = JSON.parse(
+      readFileSync(candidate, "utf8"),
+    ) as SessionFile;
+    return { dir: projectDir, session };
+  } catch {
+    return null;
   }
 }
 
@@ -258,9 +282,13 @@ async function probeCompanion(
 
 let ownedChild: ChildProcess | null = null;
 
-/** Find or start a companion; resolve to the session info we'll use. */
-async function ensureCompanion(): Promise<SessionFile | null> {
-  const existing = findSession();
+/** Find or start a companion; resolve to the session info we'll use.
+ *  Spawned companions inherit the resolved project dir as their cwd
+ *  so they create `.insitue/` (and resolve customer source paths)
+ *  in the right place even when claude was started from a parent
+ *  directory or `$HOME`. */
+async function ensureCompanion(projectDir: string): Promise<SessionFile | null> {
+  const existing = findSession(projectDir);
   if (existing && (await probeCompanion(existing.session))) {
     process.stderr.write(
       `[insitue-mcp] reusing companion at :${existing.session.port} (pid ${existing.session.pid})\n`,
@@ -271,13 +299,13 @@ async function ensureCompanion(): Promise<SessionFile | null> {
   // published companion; the user always gets recent fixes without
   // touching their local install.
   process.stderr.write(
-    "[insitue-mcp] starting companion via `npx -y @insitue/companion@latest dev`…\n",
+    `[insitue-mcp] starting companion via \`npx -y @insitue/companion@latest dev\` in ${projectDir}…\n`,
   );
   ownedChild = spawn(
     "npx",
     ["-y", "@insitue/companion@latest", "dev"],
     {
-      cwd: process.cwd(),
+      cwd: projectDir,
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     },
@@ -296,11 +324,14 @@ async function ensureCompanion(): Promise<SessionFile | null> {
   });
 
   // Poll for session.json. The companion writes it on bind, so
-  // appearance + readability means "ready". 5s ceiling — beyond
+  // appearance + readability means "ready". 8s ceiling — beyond
   // that, npx is probably downloading a lot or something's wrong.
+  // (Wider than 5s because cold `npx -y` on a fresh Desktop machine
+  // legitimately takes longer than on a developer's CLI where npx
+  // is hot.)
   const start = Date.now();
-  while (Date.now() - start < 5000) {
-    const found = findSession();
+  while (Date.now() - start < 8000) {
+    const found = findSession(projectDir);
     if (found && (await probeCompanion(found.session))) {
       return found.session;
     }
@@ -424,7 +455,12 @@ function connectToCompanion(session: SessionFile): void {
 
 // ── Boot ────────────────────────────────────────────────────────────
 
-const session = await ensureCompanion();
+const projectDir = resolveProjectDir();
+process.stderr.write(
+  `[insitue-mcp] project dir: ${projectDir.dir} (via ${projectDir.source})\n`,
+);
+
+const session = await ensureCompanion(projectDir.dir);
 if (!session) {
   process.stderr.write(
     "[insitue-mcp] no companion available — `next_pick` will time out.\n",
@@ -447,7 +483,7 @@ function ensureSubscriberAttached(): void {
 
 const server = new McpServer({
   name: "insitue",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 server.registerTool(
@@ -524,6 +560,250 @@ server.registerTool(
       ],
     };
   },
+);
+
+// ── Desktop entry-point tool ────────────────────────────────────────
+
+server.registerTool(
+  "start_session",
+  {
+    description:
+      "Returns the operating instructions for InSitue + current state " +
+      "(project dir, companion reachable, buffered pick count). On " +
+      "Claude Code you typically don't need this — the slash command " +
+      "`/insitue:connect` already loaded the instructions. On Claude " +
+      "Desktop there are no slash commands, so call this once at the " +
+      "start of every session before entering the next_pick loop.",
+    inputSchema: {},
+  },
+  async () => {
+    ensureSubscriberAttached();
+    const instructions = loadInstructions();
+    const buffered = buffer.recent(32).length;
+    const status =
+      `\n\n---\n\n**Current state**\n\n` +
+      `- Project: \`${projectDir.dir}\` (resolved via ${projectDir.source})\n` +
+      `- Companion: ${session ? `reachable on port ${session.port}` : "NOT reachable"}\n` +
+      `- Buffered picks waiting: ${buffered}\n\n` +
+      "Begin the loop by calling `list_recent_picks` once, then loop " +
+      "on `next_pick`.";
+    return {
+      content: [
+        { type: "text" as const, text: instructions + status },
+      ],
+    };
+  },
+);
+
+// ── Diagnostics ─────────────────────────────────────────────────────
+
+server.registerTool(
+  "diagnose",
+  {
+    description:
+      "Run a health check on the local InSitue setup — companion " +
+      "reachability, SDK install, SWC plugin install + wiring, " +
+      "session file freshness. Returns a structured report plus " +
+      "human-readable recommendations. Use when picks don't seem to " +
+      "be flowing.",
+    inputSchema: {},
+  },
+  async () => {
+    const report = await diagnose(projectDir);
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(report, null, 2) },
+      ],
+    };
+  },
+);
+
+// ── Project-scoped file tools (Desktop-first, harmless on Code) ─────
+
+server.registerTool(
+  "read_file",
+  {
+    description:
+      "Read a file from the resolved project directory. Paths are " +
+      "relative to the project root (or absolute, in which case " +
+      "they must still live inside the project). Optional " +
+      "`startLine`/`endLine` for partial reads. On Claude Code, " +
+      "prefer the built-in Read tool — this exists primarily for " +
+      "Claude Desktop, where no built-in file tools are available.",
+    inputSchema: {
+      path: z.string().describe("Project-relative or absolute path."),
+      startLine: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("1-indexed start line (inclusive)."),
+      endLine: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("1-indexed end line (inclusive)."),
+    },
+  },
+  async ({ path, startLine, endLine }) => {
+    const opts: { startLine?: number; endLine?: number } = {};
+    if (startLine !== undefined) opts.startLine = startLine;
+    if (endLine !== undefined) opts.endLine = endLine;
+    const r = readFileInProject(projectDir.dir, path, opts);
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(r) },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  "apply_edit",
+  {
+    description:
+      "Apply a string-replacement edit to a file inside the project. " +
+      "`oldString` must occur exactly once in the file (otherwise " +
+      "pass `replaceAll: true`). Returns a status + brief summary. " +
+      "ALWAYS ask the user for explicit approval before calling " +
+      "this — InSitue's contract is human-in-the-loop on every " +
+      "write. On Claude Code, prefer the built-in Edit tool.",
+    inputSchema: {
+      path: z.string().describe("Project-relative or absolute path."),
+      oldString: z.string().describe("Exact text to replace."),
+      newString: z.string().describe("Replacement text."),
+      replaceAll: z
+        .boolean()
+        .optional()
+        .describe(
+          "Replace every occurrence of `oldString` instead of refusing on ambiguity.",
+        ),
+    },
+  },
+  async ({ path, oldString, newString, replaceAll }) => {
+    const opts: { replaceAll?: boolean } = {};
+    if (replaceAll !== undefined) opts.replaceAll = replaceAll;
+    const r = applyEditInProject(
+      projectDir.dir,
+      path,
+      oldString,
+      newString,
+      opts,
+    );
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(r) },
+      ],
+    };
+  },
+);
+
+server.registerTool(
+  "write_file",
+  {
+    description:
+      "Write the full contents of a file inside the project. Use " +
+      "for new files or full rewrites where `apply_edit`'s string " +
+      "match isn't a good fit. ALWAYS ask the user for explicit " +
+      "approval before calling. On Claude Code, prefer the built-in " +
+      "Write tool.",
+    inputSchema: {
+      path: z.string().describe("Project-relative or absolute path."),
+      content: z.string().describe("Full file contents to write."),
+      createParents: z
+        .boolean()
+        .optional()
+        .describe("Create parent directories if they don't exist."),
+    },
+  },
+  async ({ path, content, createParents }) => {
+    const opts: { createParents?: boolean } = {};
+    if (createParents !== undefined) opts.createParents = createParents;
+    const r = writeFileInProject(projectDir.dir, path, content, opts);
+    return {
+      content: [
+        { type: "text" as const, text: JSON.stringify(r) },
+      ],
+    };
+  },
+);
+
+// ── MCP prompts (Claude Desktop surfaces these natively) ────────────
+
+server.registerPrompt(
+  "connect",
+  {
+    title: "Connect to InSitue",
+    description:
+      "Loads the operating instructions and begins the pick → edit loop.",
+  },
+  () => ({
+    messages: [
+      {
+        role: "user",
+        content: { type: "text", text: loadInstructions() },
+      },
+    ],
+  }),
+);
+
+// ── MCP resources — let Desktop render the docs in-app ──────────────
+
+function readPkgFile(rel: string): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const base of [join(here, ".."), here]) {
+    const p = join(base, rel);
+    if (existsSync(p)) {
+      try {
+        return readFileSync(p, "utf8");
+      } catch {
+        return null;
+      }
+    }
+  }
+  return null;
+}
+
+server.registerResource(
+  "instructions",
+  "insitue://instructions",
+  {
+    title: "InSitue operating instructions",
+    description:
+      "The same content that drives `/insitue:connect` on Code and `start_session` on Desktop.",
+    mimeType: "text/markdown",
+  },
+  async () => ({
+    contents: [
+      {
+        uri: "insitue://instructions",
+        mimeType: "text/markdown",
+        text: loadInstructions(),
+      },
+    ],
+  }),
+);
+
+server.registerResource(
+  "readme",
+  "insitue://readme",
+  {
+    title: "@insitue/claude-plugin README",
+    description: "Package overview, setup steps, and runtime notes.",
+    mimeType: "text/markdown",
+  },
+  async () => ({
+    contents: [
+      {
+        uri: "insitue://readme",
+        mimeType: "text/markdown",
+        text:
+          readPkgFile("README.md") ??
+          "README not bundled — see https://github.com/InSitue/insitue/tree/main/packages/claude-plugin",
+      },
+    ],
+  }),
 );
 
 await server.connect(new StdioServerTransport());

@@ -1,10 +1,10 @@
-# InSitue Dev — Claude Code plugin
+# InSitue Dev — Claude plugin (Code + Desktop)
 
-Drive a `claude` session from your running app. Pick an element
-in the browser, describe what you want changed, hit Send.
-`claude` reads the file at exactly the right line and proposes
-the edit. No copy-pasting file paths. No fumbling for line
-numbers. The picker IS the prompt.
+Drive a Claude session — **Code or Desktop** — from your running
+app. Pick an element in the browser, describe what you want
+changed, hit Send. claude reads the file at exactly the right
+line and proposes the edit. No copy-pasting file paths. No
+fumbling for line numbers. The picker IS the prompt.
 
 ```
    ┌────────────────────────────────┐         ┌────────────────────┐
@@ -26,7 +26,14 @@ numbers. The picker IS the prompt.
 
 ## Setup (60 seconds, one-time)
 
-### 1. Install the plugin
+Pick your runtime:
+
+- **Claude Code** (the CLI / terminal app) → §1A below.
+- **Claude Desktop** (the macOS / Windows app) → §1B below.
+
+If you use both, do both — same MCP, same widget, same picks.
+
+### 1A. Claude Code — install via the marketplace
 
 In any `claude` session:
 
@@ -37,7 +44,57 @@ In any `claude` session:
 
 That's it for the plugin side. The MCP server it ships will
 auto-start the InSitue companion process in the background of
-your `claude` session — no separate terminal to babysit.
+your `claude` session — no separate terminal to babysit. The
+slash command `/insitue:connect` enters the loop.
+
+### 1B. Claude Desktop — one-command setup
+
+Claude Desktop doesn't have a plugin marketplace, but it does
+load MCP servers from `claude_desktop_config.json`. The package
+ships an `insitue` CLI that writes the right entry for you:
+
+```bash
+# from your project directory
+npx -y @insitue/claude-plugin setup --desktop
+```
+
+What it does (all idempotent + backed up):
+
+1. Detects your OS and finds the Desktop config file
+   (`~/Library/Application Support/Claude/claude_desktop_config.json`
+   on macOS, `%APPDATA%\Claude\…` on Windows,
+   `$XDG_CONFIG_HOME/Claude/…` on Linux).
+2. Backs up the existing file with an `.insitue-backup-<timestamp>`
+   suffix.
+3. Adds (or updates) a `mcpServers["insitue-<projectname>"]`
+   entry pointing at `npx -y @insitue/claude-plugin@latest`
+   with `INSITUE_PROJECT_DIR` set to your project.
+
+Restart Claude Desktop, open a new chat, and type:
+
+> Use the InSitue MCP — call `start_session`.
+
+claude fetches the operating instructions, attaches to the
+companion, and enters the loop. The slash command on Code and
+`start_session` on Desktop deliver the exact same content.
+
+**Multi-project?** Run `setup --desktop --project=/path/to/other`
+in each project root. Each gets its own MCP entry
+(`insitue-<dirname>`), so switching between projects in Desktop
+is just picking the right server-prefix in chat.
+
+**Want to see what would change first?** Append `--dry-run`. The
+CLI prints the JSON entry without touching the file.
+
+**Diagnose a setup that's misbehaving:**
+
+```bash
+npx -y @insitue/claude-plugin diagnose
+```
+
+Reports project dir, session file freshness, companion
+reachability, SDK + SWC-plugin versions + wiring, and concrete
+recommendations.
 
 ### 2. Mount the widget in your app
 
