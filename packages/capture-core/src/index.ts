@@ -77,6 +77,19 @@ export interface CaptureTarget {
   componentStack: Array<{ name: string; source?: SourceLoc }>;
   /** Robust CSS path — always present, the last-resort locator. */
   selector: string;
+  /** CMS attribution. Set when the picked element (or an ancestor)
+   *  carries a `data-insitue-cms="<handle>"` attribute — host apps
+   *  stamp this on CMS-rendered roots so tickets can tell reviewers
+   *  "this content lives in the CMS, not the component". The
+   *  `handle` is opaque to InSitue (host convention) — e.g.
+   *  `briefings:<slug>:body`. Cloud tickets show this alongside
+   *  the code source. Optional `adminUrl` (via the companion
+   *  `data-insitue-cms-url` sibling attribute) deep-links to the
+   *  CMS row in the host's admin UI. */
+  cmsSource?: {
+    handle: string;
+    adminUrl?: string;
+  };
 }
 
 export interface CaptureBundle {

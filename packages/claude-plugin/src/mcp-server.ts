@@ -64,10 +64,23 @@ interface PickEvent {
   url: string | null;
   /** Component stack (top-down). */
   componentStack: Array<{ name: string; file?: string; line?: number }>;
+  /** CMS attribution. Present when the picked element (or an
+   *  ancestor) carries a `data-insitue-cms` attribute — host
+   *  apps stamp this on CMS-rendered roots so reviewers know the
+   *  content is editable in the CMS, not in the rendering
+   *  component. `handle` is opaque to InSitue (host convention),
+   *  e.g. `briefings:hairspray-chipping:body`. */
+  cmsSource?: { handle: string; adminUrl?: string };
 }
 
 const MAX_BUFFERED_PICKS = 32;
-const NEXT_PICK_DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+// Short default long-poll. The slash command loops next_pick, so a
+// short timeout = claude yields back to the chat regularly and the
+// user's other questions get answered between calls instead of
+// being queued for 5 minutes. Picks arrive instantly via WS push
+// regardless of the timeout — the long-poll is just claude's way
+// of saying "ping me when something happens".
+const NEXT_PICK_DEFAULT_TIMEOUT_MS = 25 * 1000;
 const NEXT_PICK_MAX_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** Walk up from `start` looking for `.insitue/session.json`. */
@@ -106,6 +119,7 @@ function summariseBundle(raw: {
         name: string;
         source?: { file: string; line?: number };
       }>;
+      cmsSource?: { handle: string; adminUrl?: string };
     } | null;
     userNote?: string;
     runtime?: { url?: string };
@@ -141,6 +155,7 @@ function summariseBundle(raw: {
     userNote: raw.bundle.userNote ?? null,
     url: raw.bundle.runtime?.url ?? null,
     componentStack,
+    ...(t?.cmsSource ? { cmsSource: t.cmsSource } : {}),
   };
 }
 
@@ -362,8 +377,24 @@ function connectToCompanion(session: SessionFile): void {
       }
       if (tag === "broadcast-capture") {
         try {
-          buffer.push(
-            summariseBundle(m as Parameters<typeof summariseBundle>[0]),
+          const summary = summariseBundle(
+            m as Parameters<typeof summariseBundle>[0],
+          );
+          buffer.push(summary);
+          // Stderr ack so the user sees confirmation in their claude
+          // transcript the moment the pick lands — they no longer
+          // have to wait for the next_pick tool call to finish to
+          // know it arrived.
+          const note = summary.userNote
+            ? summary.userNote.length > 60
+              ? `${summary.userNote.slice(0, 57)}…`
+              : summary.userNote
+            : "(no description)";
+          const where = summary.source
+            ? `${summary.source.file}:${summary.source.line}`
+            : summary.target;
+          process.stderr.write(
+            `[insitue] 📥 pick received — "${note}" @ ${where}\n`,
           );
         } catch (err) {
           process.stderr.write(

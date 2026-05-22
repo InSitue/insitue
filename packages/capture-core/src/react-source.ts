@@ -68,6 +68,26 @@ function fromAttribute(el: Element): SourceLoc | null {
   return null;
 }
 
+/** Find the nearest ancestor (incl. el itself) stamped with a
+ *  `data-insitue-cms` attribute. Host apps emit this on CMS-rendered
+ *  roots so the picker can attribute content to its CMS row, not
+ *  just the rendering component. Walks up to 16 levels — CMS roots
+ *  are typically a few wrappers up from any given paragraph. */
+function fromCmsAttribute(
+  el: Element,
+): CaptureTarget["cmsSource"] | undefined {
+  let cur: Element | null = el;
+  for (let i = 0; cur && i < 16; i++, cur = cur.parentElement) {
+    const handle = cur.getAttribute("data-insitue-cms");
+    if (handle) {
+      const adminUrl =
+        cur.getAttribute("data-insitue-cms-url") ?? undefined;
+      return adminUrl ? { handle, adminUrl } : { handle };
+    }
+  }
+  return undefined;
+}
+
 export function resolveTarget(el: Element): CaptureTarget {
   const selector = buildSelector(el);
   const fiber = getFiber(el);
@@ -114,7 +134,11 @@ export function resolveTarget(el: Element): CaptureTarget {
     }
   }
 
-  return source === undefined
-    ? { confidence, componentStack, selector }
-    : { source, confidence, componentStack, selector };
+  const cmsSource = fromCmsAttribute(el);
+
+  const base: CaptureTarget =
+    source === undefined
+      ? { confidence, componentStack, selector }
+      : { source, confidence, componentStack, selector };
+  return cmsSource ? { ...base, cmsSource } : base;
 }

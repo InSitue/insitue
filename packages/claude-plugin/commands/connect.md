@@ -21,7 +21,11 @@ not need to ask the user to run any extra commands.
    to click Send in the InSitue panel"). Otherwise just say
    "Connected. Pick something in the browser when you're ready."
 2. Enter the loop: call `mcp__insitue__next_pick`. It long-polls
-   (~5 min default). When it returns with `status: "ok"`:
+   (~25s default — short on purpose so the chat stays responsive
+   to other questions the user might type while you wait). When
+   it returns with `status: "timeout"`, **call it again immediately
+   without announcing it** — the timeout is just a heartbeat, not
+   news. When it returns with `status: "ok"`:
    - **Always echo the prompt back first.** Before any action,
      diff, or follow-up question, lead with:
 
@@ -54,7 +58,13 @@ not need to ask the user to run any extra commands.
    - Loop back to `next_pick`.
 3. If `next_pick` returns `status: "timeout"`, the user simply
    hasn't picked anything yet. Stay quiet and call `next_pick`
-   again.
+   again. **Do not narrate the loop** — no "still waiting…", no
+   "polling again…". The user sees `[insitue] 📥 pick received`
+   on stderr the moment their pick lands; that's the
+   confirmation, not your narration. If the user types another
+   question while you're between calls, answer it first (since
+   the chat is responsive), then resume the loop with
+   `next_pick`.
 4. If a pick comes back with `target` starting with
    `[insitue]` (e.g. "companion disconnected"), tell the user
    what happened in one sentence and call `next_pick` again —
