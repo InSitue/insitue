@@ -4,7 +4,7 @@ dist/
 .turbo/
 *.tsbuildinfo
 .DS_Store
-.insitu/
+.insitue/
 *.log
 
 # Rust build artifacts (the SWC plugin's target/ is 480+ MB; we
