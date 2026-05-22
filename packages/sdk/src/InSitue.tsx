@@ -79,7 +79,7 @@ export function InSitueCapture({
           ...(endpoint ? { endpoint } : {}),
           ...(onCapture ? { onCapture } : {}),
           ...(sink ? { sink } : {}),
-          ...(defaultPixelPerfect === true ? { defaultPixelPerfect } : {}),
+          ...(defaultPixelPerfect !== undefined ? { defaultPixelPerfect } : {}),
         });
       }
     });
