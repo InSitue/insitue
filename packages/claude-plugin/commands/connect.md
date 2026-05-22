@@ -81,9 +81,25 @@ Either path is fine; pick whichever your runtime has.
    `[insitue]` (e.g. "companion disconnected"), tell the user
    what happened in one sentence and call `next_pick` again —
    the bridge auto-reconnects.
-5. Exit the loop when the user says "stop", "done", "quit",
-   "thanks", "exit", or anything else that clearly ends the
-   session.
+5. **End the session properly.** When the user says "stop",
+   "done", "quit", "thanks", "exit", "disconnect", "stop
+   insitue", or anything else that clearly ends the InSitue
+   session, do BOTH of these:
+   a. Call `mcp__insitue__end_session` ONCE. This is non-
+      optional. Without it the browser launcher stays purple
+      forever — the user sees you as "still listening" when
+      you're not. The teardown is cheap (closes a WS, drops a
+      file) and safe to repeat.
+   b. Stop calling `next_pick`. Acknowledge the disconnect in
+      one short line.
+
+   If the user's "stop" is clearly scoped to *the current task*
+   ("stop reading that file", "stop, that's not what I meant")
+   — i.e. they're not signalling end-of-InSitue — leave the
+   subscriber attached and keep the loop alive. Read the room.
+
+   On Claude Code the user can also run `/insitue:disconnect`
+   directly; that hits `end_session` the same way.
 
 ## Guardrails
 

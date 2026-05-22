@@ -886,7 +886,14 @@ function CaptureApp(props: AppProps) {
       bundle?.screenshot
         ? h("img", {
             src: bundle.screenshot.dataUrl,
-            style: `width:100%;max-height:120px;object-fit:cover;border:1px solid ${C.line};border-radius:10px;margin-bottom:12px`,
+            // Honest preview: scale to the panel width and let the
+            // captured bitmap's aspect ratio drive the height. A
+            // generous max-height + `object-fit:contain` is the
+            // safety net for unusually tall captures (full-page
+            // backgrounds, sidebar columns) — letterboxes against
+            // the dark surface rather than cropping out what the
+            // user actually picked.
+            style: `width:100%;height:auto;max-height:320px;object-fit:contain;background:#000;border:1px solid ${C.line};border-radius:10px;margin-bottom:12px;display:block`,
           })
         : bundle?.screenshotUnavailable
           ? h(
@@ -1020,10 +1027,9 @@ function CaptureApp(props: AppProps) {
     h(
       "div",
       {
-        style: `display:flex;justify-content:space-between;padding:9px 16px;border-top:1px solid ${C.line};color:${C.faint};font-size:11px`,
+        style: `display:flex;justify-content:flex-end;padding:9px 16px;border-top:1px solid ${C.line};color:${C.faint};font-size:11px`,
       },
       [
-        h("span", {}, isDev ? "InSitue Dev · pick + describe → CLI" : ""),
         h(
           "span",
           { title: `@insitue/sdk@${__SDK_VERSION__}` },

@@ -26,3 +26,5 @@ if (first && SUBCOMMANDS.has(first)) {
 } else {
   await import("./mcp-server.js");
 }
+
+export {};

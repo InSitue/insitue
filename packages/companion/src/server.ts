@@ -9,8 +9,9 @@
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import { z } from "zod";
 import {
@@ -27,7 +28,34 @@ import {
 import { resolveCapture } from "./capture.js";
 import { AgentOrchestrator } from "./agent/orchestrator.js";
 
-export const COMPANION_VERSION = "0.0.0";
+/** Read the companion's published version from package.json. The
+ *  file ships with the package — `dist/server.js` is sibling to
+ *  `package.json` after tsup builds, so we walk up one to find it.
+ *  Falls back to "0.0.0" when the file isn't reachable (running
+ *  from a non-installed build, etc.). */
+function readPackageVersion(): string {
+  try {
+    const here = dirname(fileURLToPath(import.meta.url));
+    for (const p of [
+      join(here, "..", "package.json"),
+      join(here, "package.json"),
+    ]) {
+      try {
+        return (
+          (JSON.parse(readFileSync(p, "utf8")) as { version?: string })
+            .version ?? "0.0.0"
+        );
+      } catch {
+        /* try next */
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return "0.0.0";
+}
+
+export const COMPANION_VERSION = readPackageVersion();
 
 export type AgentTransport = "cli-headless" | "mcp" | "sdk";
 

@@ -51,7 +51,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -377,11 +377,18 @@ process.on("SIGTERM", () => {
 
 const buffer = new PickBuffer();
 
-function connectToCompanion(session: SessionFile): void {
-  const url = `ws://127.0.0.1:${session.port}/insitue/cli`;
+// Module-level WS state — `endSession()` needs to close the active
+// socket and cancel pending reconnects when the user disconnects.
+let activeWs: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let disconnecting = false;
+
+function connectToCompanion(s: SessionFile): void {
+  const url = `ws://127.0.0.1:${s.port}/insitue/cli`;
   const ws = new WebSocket(url, {
     headers: { "user-agent": "insitue-claude-plugin" },
   });
+  activeWs = ws;
   ws.on("open", () => {
     ws.send(
       JSON.stringify({
@@ -389,7 +396,7 @@ function connectToCompanion(session: SessionFile): void {
         // Pin to the companion's pinned protocol version. Bump
         // when the wire format breaks.
         protocolVersion: 5,
-        token: session.token,
+        token: s.token,
       }),
     );
   });
@@ -441,12 +448,16 @@ function connectToCompanion(session: SessionFile): void {
     }
   });
   ws.on("close", () => {
+    if (activeWs === ws) activeWs = null;
     buffer.rejectAll("companion disconnected — restart `claude` to reconnect");
+    // User-initiated disconnect suppresses the reconnect loop —
+    // otherwise endSession()'s close would just re-tether 2s later.
+    if (disconnecting) return;
     // Auto-reconnect. The companion may legitimately restart (HMR,
     // user stopped + restarted). Bounded retries would be wrong:
     // claude keeps the MCP server alive for the whole session, so
     // we want to recover whenever the companion is back.
-    setTimeout(() => connectToCompanion(session), 2_000);
+    reconnectTimer = setTimeout(() => connectToCompanion(s), 2_000);
   });
   ws.on("error", () => {
     /* close handler owns reconnect */
@@ -460,7 +471,7 @@ process.stderr.write(
   `[insitue-mcp] project dir: ${projectDir.dir} (via ${projectDir.source})\n`,
 );
 
-const session = await ensureCompanion(projectDir.dir);
+let session: SessionFile | null = await ensureCompanion(projectDir.dir);
 if (!session) {
   process.stderr.write(
     "[insitue-mcp] no companion available — `next_pick` will time out.\n",
@@ -474,11 +485,73 @@ if (!session) {
 // state the instant `claude` is open, even though the user hasn't
 // asked for InSitue picks yet — misleading. Lazy attach keeps the
 // launcher muted until there's a real listener.
+//
+// After an `end_session` teardown we also use this on next attach
+// to re-spawn the companion if needed (the user might've blown the
+// session away and want to reconnect later in the same chat).
 let attached = false;
-function ensureSubscriberAttached(): void {
-  if (attached || !session) return;
+async function ensureSubscriberAttached(): Promise<void> {
+  if (attached) return;
+  disconnecting = false;
+  if (!session) {
+    session = await ensureCompanion(projectDir.dir);
+    if (!session) return;
+  }
   attached = true;
   connectToCompanion(session);
+}
+
+/** Symmetric teardown for the connect lifecycle. Closes the WS
+ *  (subscriber count drops → browser launcher mutes), suppresses
+ *  the auto-reconnect, kills the companion if we spawned it, and
+ *  drops the stale session file. Safe to call multiple times. */
+function endSession(): {
+  closedWs: boolean;
+  killedCompanion: boolean;
+  removedSessionFile: boolean;
+} {
+  disconnecting = true;
+  attached = false;
+  let closedWs = false;
+  let killedCompanion = false;
+  let removedSessionFile = false;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (activeWs) {
+    try {
+      activeWs.close();
+      closedWs = true;
+    } catch {
+      /* already closed */
+    }
+    activeWs = null;
+  }
+  if (ownedChild) {
+    killedCompanion = true;
+    cleanupOwnedChild();
+  }
+  // Clean up the session file IF we owned the companion that wrote
+  // it. Without this, a future `/insitue:connect` would probe the
+  // stale file, find the PID dead, and respawn — which works, but
+  // is slower than a clean start. Reused-external companions
+  // (cases where the user ran `insitue dev` themselves) keep their
+  // session file: we didn't write it, we don't delete it.
+  if (killedCompanion) {
+    const f = join(projectDir.dir, ".insitue", "session.json");
+    if (existsSync(f)) {
+      try {
+        rmSync(f);
+        removedSessionFile = true;
+      } catch {
+        /* best-effort */
+      }
+    }
+  }
+  session = null;
+  return { closedWs, killedCompanion, removedSessionFile };
 }
 
 const server = new McpServer({
@@ -509,7 +582,7 @@ server.registerTool(
     },
   },
   async ({ timeout_ms }) => {
-    ensureSubscriberAttached();
+    await ensureSubscriberAttached();
     const ms = timeout_ms ?? NEXT_PICK_DEFAULT_TIMEOUT_MS;
     const pick = await buffer.next(ms);
     if (!pick) {
@@ -549,7 +622,7 @@ server.registerTool(
     },
   },
   async ({ limit }) => {
-    ensureSubscriberAttached();
+    await ensureSubscriberAttached();
     const picks = buffer.recent(limit ?? 10);
     return {
       content: [
@@ -577,7 +650,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    ensureSubscriberAttached();
+    await ensureSubscriberAttached();
     const instructions = loadInstructions();
     const buffered = buffer.recent(32).length;
     const status =
@@ -590,6 +663,34 @@ server.registerTool(
     return {
       content: [
         { type: "text" as const, text: instructions + status },
+      ],
+    };
+  },
+);
+
+// ── Disconnect ──────────────────────────────────────────────────────
+
+server.registerTool(
+  "end_session",
+  {
+    description:
+      "Cleanly disconnect this MCP from the InSitue companion: close " +
+      "the WS subscriber (browser launcher mutes immediately), " +
+      "suppress auto-reconnect, kill the companion if we spawned it, " +
+      "and remove the stale session file. The user can reconnect " +
+      "later in the same claude session via `/insitue:connect` " +
+      "(Code) or by calling `start_session` again (Desktop). Safe " +
+      "to call repeatedly. Returns what was actually torn down.",
+    inputSchema: {},
+  },
+  async () => {
+    const r = endSession();
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: JSON.stringify({ status: "disconnected", ...r }),
+        },
       ],
     };
   },
