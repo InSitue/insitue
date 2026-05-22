@@ -907,7 +907,13 @@ function CaptureApp(props: AppProps) {
               `Screenshot unavailable — ${bundle.screenshotUnavailable}`,
             )
           : null,
-      bundle?.screenshot?.qualityNote && !tabCaptureActive
+      // Tab-capture upgrade prompt — dev sink only. End users on the
+      // cloud sink are reporting a bug, not optimising screenshot
+      // fidelity; asking them to grant getDisplayMedia mid-report is
+      // a trust ask that costs more reports than it improves. The
+      // imperfection still rides along in `bundle.screenshot.qualityNote`
+      // for reviewers to see in the ticket UI.
+      isDev && bundle?.screenshot?.qualityNote && !tabCaptureActive
         ? h(
             "div",
             {
