@@ -77,11 +77,7 @@ Either path is fine; pick whichever your runtime has.
    question while you're between calls, answer it first (since
    the chat is responsive), then resume the loop with
    `next_pick`.
-4. If a pick comes back with `target` starting with
-   `[insitue]` (e.g. "companion disconnected"), tell the user
-   what happened in one sentence and call `next_pick` again —
-   the bridge auto-reconnects.
-5. **End the session properly.** When the user says "stop",
+4. **End the session properly.** When the user says "stop",
    "done", "quit", "thanks", "exit", "disconnect", "stop
    insitue", or anything else that clearly ends the InSitue
    session, do BOTH of these:

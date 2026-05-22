@@ -222,22 +222,18 @@ class PickBuffer {
     return this.picks.slice(-limit);
   }
 
-  /** WS reconnects — drop pending waiters with a sentinel so claude
-   *  sees the disruption instead of hanging forever. */
-  rejectAll(reason: string): void {
+  /** WS dropped — release pending waiters silently. They resolve to
+   *  `null` (same shape as a natural timeout), so the agent's
+   *  next_pick loop just calls again and the auto-reconnect 2s
+   *  timer heals the bridge invisibly. We previously synthesized a
+   *  fake "reconnect" pick here; that surfaced HMR / plugin-reload
+   *  blips to the user as if they were real picks and trained the
+   *  agent to stop looping. The stderr trace at the close call site
+   *  is the operator-visible signal; the agent stays quiet. */
+  dropWaiters(): void {
     for (const w of this.waiters) {
       clearTimeout(w.timer);
-      w.resolve({
-        id: "reconnect",
-        at: new Date().toISOString(),
-        source: null,
-        confidence: "n/a",
-        target: `[insitue] ${reason}`,
-        selector: null,
-        userNote: null,
-        url: null,
-        componentStack: [],
-      });
+      w.resolve(null);
     }
     this.waiters.length = 0;
   }
@@ -449,14 +445,21 @@ function connectToCompanion(s: SessionFile): void {
   });
   ws.on("close", () => {
     if (activeWs === ws) activeWs = null;
-    buffer.rejectAll("companion disconnected — restart `claude` to reconnect");
+    // Release pending waiters with `null` so the agent's next_pick
+    // loop quietly polls again. No synthetic pick, no chat noise.
+    buffer.dropWaiters();
     // User-initiated disconnect suppresses the reconnect loop —
     // otherwise endSession()'s close would just re-tether 2s later.
     if (disconnecting) return;
+    // Observable in the user's CLI without bubbling up as a pick.
+    process.stderr.write(
+      "[insitue-mcp] companion link dropped — reconnecting in 2s\n",
+    );
     // Auto-reconnect. The companion may legitimately restart (HMR,
-    // user stopped + restarted). Bounded retries would be wrong:
-    // claude keeps the MCP server alive for the whole session, so
-    // we want to recover whenever the companion is back.
+    // user stopped + restarted, plugin reload). Bounded retries
+    // would be wrong: claude keeps the MCP server alive for the
+    // whole session, so we want to recover whenever the companion
+    // is back.
     reconnectTimer = setTimeout(() => connectToCompanion(s), 2_000);
   });
   ws.on("error", () => {
