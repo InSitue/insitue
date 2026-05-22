@@ -1,6 +1,6 @@
 {
   "name": "@insitue/capture-core",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -17,16 +17,21 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",
     "dev": "tsup src/index.ts --format esm --dts --watch",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build"
   },
   "devDependencies": {
     "tsup": "^8.3.5",
     "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }

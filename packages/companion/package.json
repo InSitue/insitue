@@ -1,6 +1,6 @@
 {
   "name": "@insitue/companion",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "type": "module",
   "publishConfig": {
     "access": "public"
@@ -19,7 +19,8 @@
     "start": "node dist/cli.js",
     "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "pnpm build && pnpm test"
   },
   "dependencies": {
     "@insitue/agent-core": "workspace:*",
@@ -43,5 +44,8 @@
     "@types/ws": "^8.5.13",
     "tsup": "^8.3.5",
     "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=24"
   }
 }
