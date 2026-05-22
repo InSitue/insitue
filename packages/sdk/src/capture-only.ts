@@ -593,15 +593,25 @@ function CaptureApp(props: AppProps) {
     //   - Active (claude attached via /insitue:connect) → the
     //     whole button fills with the cloud-accent purple. The
     //     inner dot inverts to white. Brand-coloured "I'm live."
-    //   - Picking → active styling + pulsing inner dot.
+    //   - Picking → distinct "armed" treatment: the dot becomes a
+    //     crosshair, the container pulses with a breathing
+    //     outer ring. Visually unmistakable from idle-active so
+    //     the user always knows the cursor will hit a target on
+    //     next click.
     if (isDev) {
-      const containerBg = muted ? C.surface : CLOUD.accentSolid;
+      const containerBg = picking
+        ? CLOUD.accentSolid
+        : muted
+          ? C.surface
+          : CLOUD.accentSolid;
       const containerBorder = muted
         ? `1px solid ${C.line}`
         : "1px solid transparent";
-      const containerShadow = muted
-        ? C.shadow
-        : `0 0 0 4px rgba(91,91,240,.16),0 12px 30px rgba(60,55,200,.42)`;
+      const containerShadow = picking
+        ? `0 0 0 6px rgba(91,91,240,.22),0 12px 30px rgba(60,55,200,.45)`
+        : muted
+          ? C.shadow
+          : `0 0 0 4px rgba(91,91,240,.16),0 12px 30px rgba(60,55,200,.42)`;
       const innerBg = muted ? "#9a9aa4" : "#ffffff";
       const innerShadow = muted ? "none" : "0 1px 3px rgba(0,0,0,.20)";
       const onClickLauncher = picking
@@ -633,18 +643,70 @@ function CaptureApp(props: AppProps) {
             "button",
             {
               onClick: onClickLauncher,
-              style: `all:unset;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "default" : "pointer"};background:${containerBg};border:${containerBorder};border-radius:50%;box-shadow:${containerShadow};transition:background .18s ease,box-shadow .18s ease`,
+              style: `all:unset;display:flex;align-items:center;justify-content:center;width:38px;height:38px;cursor:${picking ? "crosshair" : "pointer"};background:${containerBg};border:${containerBorder};border-radius:50%;box-shadow:${containerShadow};transition:background .18s ease,box-shadow .18s ease;${picking ? "animation:iarmedring 1.4s ease-in-out infinite" : ""}`,
               title: tooltip,
             },
             [
-              h("span", {
-                style: `width:11px;height:11px;border-radius:3px;background:${innerBg};box-shadow:${innerShadow};${picking ? "animation:ipulse 1.1s ease-in-out infinite" : ""}`,
-              }),
+              picking
+                ? h(
+                    "svg",
+                    {
+                      width: 16,
+                      height: 16,
+                      viewBox: "0 0 16 16",
+                      style: "display:block",
+                    },
+                    [
+                      h("circle", {
+                        cx: 8,
+                        cy: 8,
+                        r: 6,
+                        fill: "none",
+                        stroke: "#ffffff",
+                        "stroke-width": 1.5,
+                      }),
+                      h("line", {
+                        x1: 8,
+                        y1: 0,
+                        x2: 8,
+                        y2: 4,
+                        stroke: "#ffffff",
+                        "stroke-width": 1.5,
+                      }),
+                      h("line", {
+                        x1: 8,
+                        y1: 12,
+                        x2: 8,
+                        y2: 16,
+                        stroke: "#ffffff",
+                        "stroke-width": 1.5,
+                      }),
+                      h("line", {
+                        x1: 0,
+                        y1: 8,
+                        x2: 4,
+                        y2: 8,
+                        stroke: "#ffffff",
+                        "stroke-width": 1.5,
+                      }),
+                      h("line", {
+                        x1: 12,
+                        y1: 8,
+                        x2: 16,
+                        y2: 8,
+                        stroke: "#ffffff",
+                        "stroke-width": 1.5,
+                      }),
+                    ],
+                  )
+                : h("span", {
+                    style: `width:11px;height:11px;border-radius:3px;background:${innerBg};box-shadow:${innerShadow}`,
+                  }),
               picking
                 ? h(
                     "style",
                     {},
-                    "@keyframes ipulse{0%,100%{opacity:.45}50%{opacity:1}}",
+                    "@keyframes iarmedring{0%,100%{box-shadow:0 0 0 6px rgba(91,91,240,.22),0 12px 30px rgba(60,55,200,.45)}50%{box-shadow:0 0 0 10px rgba(91,91,240,.10),0 16px 36px rgba(60,55,200,.55)}}",
                   )
                 : null,
             ],
