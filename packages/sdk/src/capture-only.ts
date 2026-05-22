@@ -43,7 +43,10 @@ import {
   retryDisplayMedia,
   stopDisplayMedia,
 } from "./capture.js";
-import { setCaptureSettings } from "./capture-settings.js";
+import {
+  hasPersistedCaptureSettings,
+  setCaptureSettings,
+} from "./capture-settings.js";
 import { CompanionClient } from "./client.js";
 
 /** Where captures go. Auto-detected from `projectKey` if omitted. */
@@ -1042,10 +1045,22 @@ function CaptureApp(props: AppProps) {
 
 export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   installRuntimeCollectors();
+  const sink = resolveSink(opts);
+  // Pixel-perfect default: explicit option wins. Otherwise, the
+  // companion sink (= dev mode) opts in on first mount so hero
+  // banners / motion components / text-over-image captures don't
+  // suffer html-to-image's z-order trade-offs. We only set this on
+  // first mount (no persisted settings yet) — if the dev later
+  // turns it off via the widget's gear, that choice sticks.
   if (opts.defaultPixelPerfect === true) {
     setCaptureSettings({ alwaysPixelPerfect: true });
+  } else if (
+    opts.defaultPixelPerfect !== false &&
+    sink.kind === "companion" &&
+    !hasPersistedCaptureSettings()
+  ) {
+    setCaptureSettings({ alwaysPixelPerfect: true });
   }
-  const sink = resolveSink(opts);
   const host = document.createElement("div");
   host.id = "insitue-capture-root";
   host.setAttribute("data-insitue", "");

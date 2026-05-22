@@ -490,8 +490,26 @@ if (!session) {
 // to re-spawn the companion if needed (the user might've blown the
 // session away and want to reconnect later in the same chat).
 let attached = false;
-async function ensureSubscriberAttached(): Promise<void> {
+/**
+ * Two attach modes:
+ *
+ *   - `explicit: true`   — called from `start_session` or
+ *     `list_recent_picks` (the user's "I want to connect" verbs).
+ *     Clears the `disconnecting` flag and respawns the companion
+ *     if needed. This is how reconnect-after-disconnect works.
+ *
+ *   - `explicit: false`  — called from `next_pick` (the loop).
+ *     If `disconnecting` is set (user ran `end_session` /
+ *     `/insitue:disconnect`), this is a NO-OP. We don't want a
+ *     stale loop call to silently respawn the companion and
+ *     re-light the browser launcher right after the user asked
+ *     us to disconnect.
+ */
+async function ensureSubscriberAttached(
+  opts: { explicit?: boolean } = {},
+): Promise<void> {
   if (attached) return;
+  if (disconnecting && !opts.explicit) return;
   disconnecting = false;
   if (!session) {
     session = await ensureCompanion(projectDir.dir);
@@ -583,6 +601,24 @@ server.registerTool(
   },
   async ({ timeout_ms }) => {
     await ensureSubscriberAttached();
+    if (disconnecting) {
+      // The user ran `end_session` / `/insitue:disconnect`. Don't
+      // silently respawn the companion just because the loop kept
+      // calling next_pick. Surface a clear status so claude exits
+      // the loop and tells the user how to reconnect.
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              status: "disconnected",
+              message:
+                "InSitue session was disconnected. Run /insitue:connect (Code) or call start_session (Desktop) to reattach.",
+            }),
+          },
+        ],
+      };
+    }
     const ms = timeout_ms ?? NEXT_PICK_DEFAULT_TIMEOUT_MS;
     const pick = await buffer.next(ms);
     if (!pick) {
@@ -622,7 +658,7 @@ server.registerTool(
     },
   },
   async ({ limit }) => {
-    await ensureSubscriberAttached();
+    await ensureSubscriberAttached({ explicit: true });
     const picks = buffer.recent(limit ?? 10);
     return {
       content: [
@@ -650,7 +686,7 @@ server.registerTool(
     inputSchema: {},
   },
   async () => {
-    await ensureSubscriberAttached();
+    await ensureSubscriberAttached({ explicit: true });
     const instructions = loadInstructions();
     const buffered = buffer.recent(32).length;
     const status =

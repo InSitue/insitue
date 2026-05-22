@@ -61,6 +61,20 @@ export function getCaptureSettings(): CaptureSettings {
   }
 }
 
+/** True if the user has ever explicitly persisted a setting (i.e.
+ *  localStorage has our key). Callers use this to apply a default
+ *  on first mount without clobbering a later user choice — e.g.
+ *  the dev widget defaults to pixel-perfect on first run, but if
+ *  the user toggles it off via the gear, that choice persists. */
+export function hasPersistedCaptureSettings(): boolean {
+  if (typeof localStorage === "undefined") return false;
+  try {
+    return localStorage.getItem(storageKey()) != null;
+  } catch {
+    return false;
+  }
+}
+
 export function setCaptureSettings(patch: Partial<CaptureSettings>): void {
   const next = { ...getCaptureSettings(), ...patch };
   cached = next;
