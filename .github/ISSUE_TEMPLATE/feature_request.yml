@@ -1,0 +1,61 @@
+name: Feature request
+description: New capability, behavior change, or product enhancement.
+title: "[feat] "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - cloud
+        - companion
+        - sdk
+        - agent-core
+        - capture-core
+        - swc-plugin
+        - claude-plugin
+        - docs
+        - examples
+        - infra
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's the underlying user/developer pain? Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: How might we solve it? Sketches, API ideas, or competing options welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How will we know this is done? Bullet points.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What did you rule out, and why?
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Related issues, prior art, user requests, anything else.
+    validations:
+      required: false

@@ -1,0 +1,46 @@
+name: Task
+description: Concrete unit of work — refactor, chore, doc update, small fix, follow-up.
+title: "[task] "
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - cloud
+        - companion
+        - sdk
+        - agent-core
+        - capture-core
+        - swc-plugin
+        - claude-plugin
+        - docs
+        - examples
+        - ci
+        - infra
+        - not sure
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: What needs to happen
+      description: One paragraph. What's the change, and why now?
+    validations:
+      required: true
+  - type: textarea
+    id: checklist
+    attributes:
+      label: Checklist
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: false
+  - type: textarea
+    id: links
+    attributes:
+      label: Links
+      description: Related PRs, issues, designs, docs.
+    validations:
+      required: false
