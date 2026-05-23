@@ -1,0 +1,17 @@
+{
+  "$schema": "https://code.claude.com/schemas/claude-plugin-marketplace.json",
+  "name": "insitue-plugins",
+  "description": "InSitue Claude Code plugins — drive your editor from a running app's UI.",
+  "owner": {
+    "name": "InSitue",
+    "email": "hello@insitue.com"
+  },
+  "plugins": [
+    {
+      "name": "insitue",
+      "source": "./packages/claude-plugin",
+      "description": "Drive a Claude Code session from the InSitue browser overlay. Pick an element in your app, claude reads the file and proposes the edit.",
+      "version": "0.4.5"
+    }
+  ]
+}
