@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * `<InSitueCapture />` — the ONE InSitue widget. Same UI, two
  * sinks. Auto-detected:
