@@ -67,7 +67,10 @@ export class CompanionClient {
       if (!res.ok) throw new Error(`handshake ${res.status}`);
       token = (await res.json()).token as string;
     } catch (e) {
-      this.events.onState("error", `companion unreachable (run \`npx insitue\`)`);
+      this.events.onState(
+        "error",
+        `companion unreachable on :${this.port} — start it with \`npx @insitue/companion dev\``,
+      );
       return;
     }
     await new Promise<void>((done) => {

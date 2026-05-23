@@ -3,7 +3,9 @@
  * `insitue` CLI.
  *
  *   insitue dev      — start the companion alongside your dev server
- *                      (default; `npx insitue` with no args still works)
+ *                      (the bin is `insitue`, the package on npm is
+ *                      `@insitue/companion`; `npx @insitue/companion`
+ *                      with no args still defaults to `dev`)
  *   insitue connect  — attach this terminal to a running companion;
  *                      every browser pick streams to stdout. Pipeable
  *                      into Claude / Aider / any AI tool. (#147 M1)
@@ -121,9 +123,9 @@ function startDev(opts: DevOpts): void {
 devOptions(program.command("dev").description("start the companion"))
   .action(startDev);
 
-// Backwards-compat: `npx insitue` with no args still starts dev mode.
-// commander runs the program-level action when no subcommand is
-// specified and the program itself has an action.
+// Backwards-compat: `npx @insitue/companion` (no subcommand) still
+// starts dev mode. commander runs the program-level action when no
+// subcommand is specified and the program itself has an action.
 devOptions(program).action(startDev);
 
 // ── connect ──────────────────────────────────────────────────────

@@ -83,7 +83,7 @@ export async function runConnect(opts: ConnectOpts): Promise<void> {
   if (!found) {
     process.stderr.write(
       "[insitue] no running companion found.\n" +
-        "  Start one in your project root: npx insitue dev\n",
+        "  Start one in your project root: npx @insitue/companion dev\n",
     );
     process.exit(1);
   }

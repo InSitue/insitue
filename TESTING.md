@@ -61,7 +61,7 @@ pnpm license:check    # fails if any production dep is non-permissive
 ## 5. Dogfood in a real app (manual, dev-only — your call)
 
 Add to a host app's root layout, dev-guarded, then run its dev server +
-`npx insitue` from that repo root:
+`npx @insitue/companion dev` from that repo root:
 
 ```tsx
 {process.env.NODE_ENV === "development" && <InSitu />}
