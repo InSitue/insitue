@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * `@insitue/sdk` — the InSitue capture widget for browser apps.
  *
@@ -5,6 +7,12 @@
  * mount; `<InSitue />` is a backward-compat dev alias (companion
  * sink). The chat-style overlay that existed pre-0.3.0 has been
  * removed in favour of the unified widget.
+ *
+ * The `"use client"` directive above marks every export here as
+ * client-only: `InSitueCapture` / `InSitue` use React hooks, and
+ * `mountCaptureOnly` touches the DOM directly. Server components
+ * importing from this entry get a clear build-time boundary
+ * instead of a runtime 500 from React's hooks-in-server guard.
  */
 export {
   InSitue,
