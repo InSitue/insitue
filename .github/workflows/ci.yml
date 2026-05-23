@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm --filter @insitue/companion run test
+
+      # Real-browser tests for the SDK's screenshot path. Every
+      # packages/sdk/src/capture.ts change ships behind these.
+      - name: Install Playwright Chromium
+        run: pnpm --filter @insitue/sdk exec playwright install --with-deps chromium
+      - run: pnpm --filter @insitue/sdk run test
+
+      - run: pnpm license:check

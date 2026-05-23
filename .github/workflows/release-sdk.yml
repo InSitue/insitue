@@ -1,0 +1,98 @@
+name: release-sdk
+
+# Publishes @insitue/sdk to npm when packages/sdk/package.json version
+# changes on main. The mental model: bump version + commit + merge,
+# CI does the rest (build → publish → tag).
+#
+# Required GitHub repo secrets:
+#   NPM_TOKEN — granular access token from npmjs.com,
+#               scoped to @insitue/* with Read + write,
+#               expires every 90 days (set a calendar reminder).
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/sdk/**"]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# npm provenance signs the package with this run's GitHub OIDC token,
+# producing the "Built and signed on GitHub Actions" badge on the
+# package page. Requires id-token: write at the job level. This repo
+# is public, so provenance is enabled (npm rejects it on private repos).
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-sdk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check whether SDK version changed
+        id: check
+        run: |
+          set -euo pipefail
+          CURR=$(jq -r .version packages/sdk/package.json)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+            echo "Dispatch — attempting publish of $CURR"
+            exit 0
+          fi
+          PREV=$(git show HEAD~1:packages/sdk/package.json 2>/dev/null | jq -r .version || echo "none")
+          echo "previous=$PREV  current=$CURR"
+          if [ "$PREV" != "$CURR" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged — skipping publish."
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (and its dependencies)
+        if: steps.check.outputs.publish == 'true'
+        # turbo respects dependsOn:^build so capture-core builds before
+        # sdk's tsup tries to resolve its types.
+        run: pnpm turbo run build --filter=@insitue/sdk
+
+      - name: Install Playwright Chromium
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm --filter @insitue/sdk exec playwright install --with-deps chromium
+
+      - name: Publish to npm with provenance
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          cd packages/sdk
+          pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release commit
+        if: steps.check.outputs.publish == 'true' && github.event_name == 'push'
+        run: |
+          TAG="sdk-v${{ steps.check.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"

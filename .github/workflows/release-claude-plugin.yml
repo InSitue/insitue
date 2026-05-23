@@ -1,0 +1,83 @@
+name: release-claude-plugin
+
+# Publishes @insitue/claude-plugin to npm when
+# packages/claude-plugin/package.json version changes on main. Mirrors
+# release-sdk.yml — bump version + commit + merge, CI does the rest.
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/claude-plugin/**"]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-claude-plugin
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check whether plugin version changed
+        id: check
+        run: |
+          set -euo pipefail
+          CURR=$(jq -r .version packages/claude-plugin/package.json)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+            echo "Dispatch — attempting publish of $CURR"
+            exit 0
+          fi
+          PREV=$(git show HEAD~1:packages/claude-plugin/package.json 2>/dev/null | jq -r .version || echo "none")
+          echo "previous=$PREV  current=$CURR"
+          if [ "$PREV" != "$CURR" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged — skipping publish."
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build plugin
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm turbo run build --filter=@insitue/claude-plugin
+
+      - name: Publish to npm with provenance
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          cd packages/claude-plugin
+          pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release commit
+        if: steps.check.outputs.publish == 'true' && github.event_name == 'push'
+        run: |
+          TAG="claude-plugin-v${{ steps.check.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"

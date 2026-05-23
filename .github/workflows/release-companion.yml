@@ -1,0 +1,94 @@
+name: release-companion
+
+# Publishes the companion chain to npm: capture-core (no deps) then
+# companion (depends on capture-core via workspace:* — pnpm rewrites
+# to the npm version at publish time, so capture-core must publish
+# first when both bump together).
+#
+# Replaces the old monorepo-era release-core.yml which also published
+# agent-core; agent-core now lives in the closed-source InSitue/insitue-cloud
+# repo and publishes from there.
+#
+# Each `pnpm publish` is a no-op when that package's on-npm version
+# already matches package.json, so bumping just one of them only
+# republishes that one.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/capture-core/**"
+      - "packages/companion/**"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-companion
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the companion chain
+        # turbo respects dependsOn:^build so capture-core builds before
+        # companion.
+        run: pnpm turbo run build --filter=@insitue/companion
+
+      - name: Publish capture-core (no-op if version unchanged)
+        run: |
+          cd packages/capture-core
+          # `pnpm publish` fails with "You cannot publish over the
+          # previously published versions" when the version on npm
+          # matches package.json — that's the no-op we want, NOT a
+          # failure. Detect and continue.
+          set +e
+          OUT=$(pnpm publish --no-git-checks --provenance 2>&1)
+          CODE=$?
+          set -e
+          if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -qE "previously published|cannot publish over|EPUBLISHCONFLICT"; then
+            echo "capture-core already at this version on npm — skipping"
+          elif [ "$CODE" -ne 0 ]; then
+            echo "$OUT"
+            exit "$CODE"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish companion (no-op if version unchanged)
+        run: |
+          cd packages/companion
+          set +e
+          OUT=$(pnpm publish --no-git-checks --provenance 2>&1)
+          CODE=$?
+          set -e
+          if [ "$CODE" -ne 0 ] && echo "$OUT" | grep -qE "previously published|cannot publish over|EPUBLISHCONFLICT"; then
+            echo "companion already at this version on npm — skipping"
+          elif [ "$CODE" -ne 0 ]; then
+            echo "$OUT"
+            exit "$CODE"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
