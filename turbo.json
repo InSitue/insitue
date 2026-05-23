@@ -1,40 +1,10 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalPassThroughEnv": [
-    "NODE_ENV",
-    "DATABASE_URL",
-    "PGLITE_DIR",
-    "INSITUE_SESSION_SECRET",
-    "INSITUE_PUBLIC_URL",
-    "INSITUE_ADMIN_LOGINS",
-    "INSITUE_INTERNAL_TOKEN",
-    "INSITUE_KILL_SWITCH",
-    "INSITUE_CONFIDENCE_MIN",
-    "INSITUE_INCLUDED_QUOTA",
-    "INSITUE_FAKE_COGS_CENTS",
-    "INSITUE_ALLOW_REAL_AGENT",
-    "INSITUE_ALLOW_REAL_BILLING",
-    "INSITUE_MAIL_FROM",
-    "GITHUB_CLIENT_ID",
-    "GITHUB_CLIENT_SECRET",
-    "GITHUB_APP_ID",
-    "GITHUB_APP_SLUG",
-    "GITHUB_APP_PRIVATE_KEY",
-    "GITHUB_WEBHOOK_SECRET",
-    "VERCEL_TOKEN",
-    "VERCEL_INTEGRATION_CLIENT_ID",
-    "VERCEL_OIDC_TOKEN",
-    "ANTHROPIC_API_KEY",
-    "STRIPE_SECRET_KEY",
-    "STRIPE_WEBHOOK_SECRET",
-    "RESEND_API_KEY",
-    "SENTRY_DSN",
-    "CRON_SECRET"
-  ],
+  "globalPassThroughEnv": ["NODE_ENV"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**"]
     },
     "typecheck": {
       "dependsOn": ["^build"]

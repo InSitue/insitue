@@ -60,7 +60,9 @@ Click in your browser. Done.
 
 Detailed setup: **[`packages/claude-plugin/README.md`](packages/claude-plugin/README.md)**.
 
-## What's in this monorepo
+## What's in this repo
+
+The **local-loop dev tool**, MIT-licensed:
 
 | Package | What it does | npm |
 |---|---|---|
@@ -68,45 +70,40 @@ Detailed setup: **[`packages/claude-plugin/README.md`](packages/claude-plugin/RE
 | **`@insitue/companion`** | Local loopback bridge. Token-auth, project-sandboxed. Usually auto-spawned by the claude plugin; can run standalone. | [`@insitue/companion`](https://www.npmjs.com/package/@insitue/companion) |
 | **`@insitue/claude-plugin`** | Claude Code plugin shipping the `/insitue:connect` slash command + MCP bridge. Auto-spawns the companion. | [`@insitue/claude-plugin`](https://www.npmjs.com/package/@insitue/claude-plugin) |
 | `@insitue/capture-core` | Pure types: `CaptureBundle`, protocol versions, sink interfaces. Shared by every package. | [`@insitue/capture-core`](https://www.npmjs.com/package/@insitue/capture-core) |
-| `@insitue/agent-core` | Provider-agnostic agent loop (used by the cloud autopilot; the local flow now delegates to claude via the plugin). | [`@insitue/agent-core`](https://www.npmjs.com/package/@insitue/agent-core) |
-| `@insitue/swc-source-attr` | SWC plugin alternative to the babel data-attribute injector (Next.js with SWC). | [`@insitue/swc-source-attr`](https://www.npmjs.com/package/@insitue/swc-source-attr) |
-| `apps/cloud` | The InSitue Cloud SaaS — production sink for the same widget. Autopilot + GitHub-App + Vercel integration. | (not on npm; deployed to Vercel) |
 
-## Dev mode (this monorepo)
+Two more packages ship from a closed-source private repo as dist-only npm releases, MIT-licensed:
+
+- [`@insitue/agent-core`](https://www.npmjs.com/package/@insitue/agent-core) — provider-agnostic agent loop, used by the cloud autopilot.
+- [`@insitue/swc-source-attr`](https://www.npmjs.com/package/@insitue/swc-source-attr) — SWC plugin tagging JSX with source-file attributes so picks resolve to `file:line`.
+
+The InSitue Cloud SaaS (production capture pipeline, autopilot, GitHub App, billing) is a separate closed-source product. The widget here works against it via the `projectKey` prop — see below.
+
+## Dev mode
 
 ```bash
 pnpm install
 pnpm build               # build the whole graph in dep order
-pnpm test                # run all package tests
-pnpm demo                # spin up the React example + companion together
+pnpm test                # run companion + sdk test suites
 ```
 
-The React example at `examples/react-app` is the simplest
-end-to-end exercise: a small React app with `<InSitue />`
-mounted, plus the companion in the same directory.
+The React example at `examples/react-app` is the simplest end-to-end exercise: a small React app with `<InSitue />` mounted, plus the companion running against it.
 
 ```bash
 cd examples/react-app
 pnpm dev &                                              # vite on :3100
-node /Users/rodleviton/Code/insitue/packages/companion/dist/cli.js dev
+node ../../packages/companion/dist/cli.js dev
 # In another terminal: claude → /insitue:connect
 ```
 
 ## Production sink (InSitue Cloud)
 
-The same `<InSitueCapture />` widget, with a `projectKey` prop,
-posts captures to InSitue Cloud:
+The same `<InSitueCapture />` widget, with a `projectKey` prop, posts captures to InSitue Cloud:
 
 ```tsx
 <InSitueCapture projectKey={process.env.NEXT_PUBLIC_INSITUE_KEY!} />
 ```
 
-End-users get a friendly "Report a problem" pill in the corner of
-your app. Reports land in your InSitue inbox; the autopilot
-opens a verified draft PR for each one. See
-[`apps/cloud`](apps/cloud) for the SaaS code (not consumed by
-end users — they just use the widget + the cloud's existing
-deployment at <https://www.insitue.com>).
+End-users get a friendly "Report a problem" pill in the corner of your app. Reports land in your InSitue inbox; the cloud autopilot opens a verified draft PR for each one. Cloud product details: <https://www.insitue.com>.
 
 ## Architecture
 
