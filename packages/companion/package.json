@@ -7,6 +7,11 @@
   },
   "description": "Local companion process: loopback WS, project sandbox, agent edit gateway.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/InSitue/insitue.git",
+    "directory": "packages/companion"
+  },
   "bin": {
     "insitue": "./dist/cli.js"
   },

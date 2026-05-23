@@ -7,6 +7,11 @@
   },
   "description": "The seam: pure, transport/agent/fs-free capture model shared by every InSitue vehicle.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/InSitue/insitue.git",
+    "directory": "packages/capture-core"
+  },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -3,6 +3,11 @@
   "version": "0.4.5",
   "description": "Drive Claude (Code AND Desktop) from the InSitue browser overlay — pick an element in your app, claude reads the file and proposes the edit.",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/InSitue/insitue.git",
+    "directory": "packages/claude-plugin"
+  },
   "type": "module",
   "files": [
     ".claude-plugin",
