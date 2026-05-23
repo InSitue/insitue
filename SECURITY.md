@@ -28,7 +28,7 @@ Examples of in-scope issues:
 
 ## What's out of scope (here)
 
-- Vulnerabilities in the hosted **InSitue Cloud** product at `cloud.insitue.com`. Those go through the cloud-product disclosure process; same email address, mention "cloud" in the subject.
+- Vulnerabilities in the hosted **InSitue Cloud** product at `www.insitue.com`. Those go through the cloud-product disclosure process; same email address, mention "cloud" in the subject.
 - Issues in third-party dependencies — please report those upstream and let us know so we can update or pin.
 - Theoretical attacks that require local code execution on the user's machine (the threat model assumes the user's machine is not already compromised).
 - Reports from automated scanners with no demonstrated exploit.
