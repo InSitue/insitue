@@ -44,6 +44,8 @@ Use one of the templates at `/issues/new/choose`:
 
 The issue forms ask for an **area** (cloud / companion / sdk / agent-core / capture-core / swc-plugin / claude-plugin / docs / examples / ci / infra) — pick the closest one. Maintainers will adjust labels and milestones during triage.
 
+We aim to respond to new issues within **5 business days**, matching the disclosure SLA in [SECURITY.md](./SECURITY.md). Triage labels are added during the first response.
+
 For security vulnerabilities, **do not file a public issue** — see [SECURITY.md](./SECURITY.md).
 
 ## Pull requests
