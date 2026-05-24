@@ -45,13 +45,13 @@ function compName(type: unknown): string | null {
   return null;
 }
 
-function toLoc(workspaceCwdRelative: DebugSource): SourceLoc | null {
-  if (!workspaceCwdRelative.fileName) return null;
+function toLoc(src: DebugSource): SourceLoc | null {
+  if (!src.fileName) return null;
   return {
     // React gives an absolute path in dev; the companion re-roots it.
-    file: workspaceCwdRelative.fileName,
-    line: workspaceCwdRelative.lineNumber ?? 1,
-    column: workspaceCwdRelative.columnNumber ?? 1,
+    file: src.fileName,
+    line: src.lineNumber ?? 1,
+    column: src.columnNumber ?? 1,
   };
 }
 
