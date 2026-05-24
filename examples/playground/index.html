@@ -38,26 +38,29 @@
     <main>
       <h1>InSitue Playground</h1>
       <p>
-        A dependency-free page to exercise the InSitue overlay end-to-end
-        without wiring a real app. The pill (bottom-left) should connect
-        to the companion and <code>Ping</code> should report a round-trip.
+        A dependency-free page that mounts the InSitue capture widget
+        with no React, no bundler, no framework. The pill (bottom-right)
+        should appear immediately; clicking it activates the picker,
+        and picks go to the local companion's WS.
       </p>
       <div class="card" id="sample-card">
         <strong>Sample region</strong>
         <p>
-          In M1 this card / its children become selectable targets; for
-          M0 it's just here so the page isn't empty.
+          This card, its heading, and the button are all selectable
+          targets. Click the InSitue pill, then click anything in this
+          card to capture it.
         </p>
         <button class="demo" type="button">A button</button>
       </div>
       <p style="color: #8a8a93; margin-top: 24px">
-        If the pill stays amber/red: run <code>pnpm companion</code> in
-        another terminal (from the repo root), then reload.
+        If picks aren't reaching anything: run
+        <code>pnpm --filter @insitue/companion dev</code> in another
+        terminal (from the repo root), then reload.
       </p>
     </main>
     <script type="module">
-      import { mountInSitue } from "/sdk/overlay.js";
-      mountInSitue();
+      import { mountCaptureOnly } from "/sdk/capture-only.js";
+      mountCaptureOnly();
     </script>
   </body>
 </html>
