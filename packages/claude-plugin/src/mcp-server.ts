@@ -57,6 +57,28 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import WebSocket from "ws";
 import { z } from "zod";
+
+/** Read this package's version from its bundled package.json so the
+ *  MCP server's reported version stays in sync with the npm release
+ *  without a duplicate literal to keep updated. Falls back to
+ *  "unknown" if the file isn't where we expect (shouldn't happen in
+ *  a published install). */
+function readPackageVersion(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  for (const base of [join(here, ".."), here, join(here, "..", "..")]) {
+    const p = join(base, "package.json");
+    if (existsSync(p)) {
+      try {
+        const v = (JSON.parse(readFileSync(p, "utf8")) as { version?: string })
+          .version;
+        if (v) return v;
+      } catch {
+        /* try next */
+      }
+    }
+  }
+  return "unknown";
+}
 import { diagnose } from "./diagnose.js";
 import {
   applyEditInProject,
@@ -98,7 +120,7 @@ interface PickEvent {
    *  apps stamp this on CMS-rendered roots so reviewers know the
    *  content is editable in the CMS, not in the rendering
    *  component. `handle` is opaque to InSitue (host convention),
-   *  e.g. `briefings:hairspray-chipping:body`. */
+   *  e.g. `articles:<slug>:body`. */
   cmsSource?: { handle: string; adminUrl?: string };
 }
 
@@ -334,7 +356,7 @@ async function ensureCompanion(projectDir: string): Promise<SessionFile | null> 
     await new Promise((r) => setTimeout(r, 200));
   }
   process.stderr.write(
-    "[insitue-mcp] companion didn't come up in 5s — see [companion] / [companion err] above\n",
+    "[insitue-mcp] companion didn't come up in 8s — see [companion] / [companion err] above\n",
   );
   return null;
 }
@@ -577,7 +599,7 @@ function endSession(): {
 
 const server = new McpServer({
   name: "insitue",
-  version: "0.3.0",
+  version: readPackageVersion(),
 });
 
 server.registerTool(
