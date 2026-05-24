@@ -3,11 +3,13 @@
  *
  * Serves the playground page on http://localhost:3000 (which matches
  * the companion's default Origin allowlist) and maps `/sdk/*` to the
- * built @insitue/sdk dist so the page can import the vanilla overlay
- * (`mountInSitue`) with no bundler and no React.
+ * built `@insitue/sdk` dist so the page can import
+ * `mountCaptureOnly` directly — no bundler, no framework, no React.
  *
- * Usage:  pnpm build  &&  pnpm example   (then, in another terminal)
- *         pnpm companion
+ * Usage (from the repo root):
+ *   pnpm --filter @insitue/sdk build         # produce packages/sdk/dist
+ *   node examples/playground/serve.mjs       # serve on :3000
+ *   pnpm --filter @insitue/companion dev     # (other terminal) run companion
  */
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
