@@ -193,6 +193,9 @@ function defaultDeliver(draft: IssueDraft): void {
     body: draft.body,
     bundle: draft.bundle,
   };
+  // The default deliver path is "no companion + no projectKey + no
+  // onCapture override", so a single console line is the only signal
+  // the dev/dogfooder gets that a capture happened. Intentional.
   // eslint-disable-next-line no-console
   console.info("[insitue] capture:", draft.title);
   try {
@@ -503,6 +506,9 @@ function CaptureApp(props: AppProps) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+    // `reset` is a stable closure over local state setters; including
+    // it would cause the listener to rebind on every render with no
+    // behavioural change. The `phase` dep is what actually matters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 

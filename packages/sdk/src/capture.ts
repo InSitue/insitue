@@ -21,9 +21,6 @@
  *   3. **Graceful degrade** — if `getDisplayMedia` is unsupported or
  *      denied, ship the layer-1 result with a `qualityNote` and
  *      surface a retry nudge in the overlay.
- *
- * See `~/.claude/plans/curious-waddling-milner.md` for the full
- * rationale + rejected alternatives.
  */
 import { toCanvas } from "html-to-image";
 import {
@@ -69,26 +66,21 @@ const IMAGE_PLACEHOLDER =
       )
     : "");
 
-// (preResolveImages removed 2026-05-21) — was meant to sidestep
-// html-to-image's srcset / decode-race quirks by fetching imgs
-// ourselves and swapping `.src` to a data URL before clone. In
-// practice it:
-//   1. Caused a visible page-image flash (the live `<img>`
-//      momentarily showed the data URL load cycle).
-//   2. Didn't actually fix next/image: html-to-image still
-//      dropped the img because the underlying problem is layout
-//      (position:absolute + aspect-ratio + object-fit:cover
-//      inside foreignObject), not fetch.
-// The right answer is `detectUnrenderedImages` + layer-2
-// escalation: let html-to-image handle CORS-friendly imgs
-// natively, detect when it silently dropped one (pixel sampling),
-// auto-escalate to `getDisplayMedia` for pixel-perfect.
+// Why we don't pre-resolve <img> srcs into data URLs before the
+// html-to-image clone: it causes a visible page-image flash (the
+// live <img> momentarily shows the data-URL load cycle), and
+// doesn't actually fix next/image — html-to-image still drops the
+// img because the underlying problem is layout
+// (position:absolute + aspect-ratio + object-fit:cover inside
+// foreignObject), not fetch. The right answer is to let
+// html-to-image handle CORS-friendly imgs, detect when it
+// silently dropped one (pixel sampling), and auto-escalate to
+// `getDisplayMedia` for pixel-perfect.
 
 /** An element we can screenshot — has rect + inline style. Both
  *  HTMLElement and SVGElement (incl. SVGGElement, the "g" group)
- *  qualify; widening from HTMLElement-only fixes the silent-skip
- *  bug where picking an SVG node produced a bundle with neither
- *  `screenshot` nor `screenshotUnavailable` set. */
+ *  qualify; widening from HTMLElement-only is what lets SVG picks
+ *  produce a screenshot at all. */
 type RasterisableElement = HTMLElement | SVGElement;
 
 /** Walk up from the picked element to find a meaningfully-sized
@@ -185,8 +177,7 @@ async function renderViewportCrop(
 
   // 3. Manual <img> overlay — paint absolutely-positioned imgs on
   //    TOP, replacing the empty/parent-bg areas html-to-image left
-  //    behind. Verified end-to-end on minimecha's HubHero via
-  //    Playwright (2026-05-21).
+  //    behind.
   //
   //    Two failure modes the fresh-load + CORS draw handles:
   //     - `drawImage(liveImg, …)` on a next/image element paints
@@ -226,9 +217,8 @@ async function renderViewportCrop(
  *  `crossOrigin="anonymous"`, and draw the fresh bitmap to `ctx`
  *  with `object-fit` / `object-position` math.
  *
- *  Why a fresh `Image` instead of `drawImage(liveImg, …)`: tested
- *  on minimecha dogfood (2026-05-21, Playwright-verified), the
- *  live `<img>` rendered by next/image produced uniform black
+ *  Why a fresh `Image` instead of `drawImage(liveImg, …)`: the
+ *  live `<img>` rendered by next/image produces uniform black
  *  pixels when drawn to canvas directly — its bitmap isn't
  *  accessible to the canvas paint path. A fresh same-URL load
  *  through the standard image pipeline IS canvas-paintable. We
@@ -680,10 +670,14 @@ async function ensureDisplayMediaStream(): Promise<MediaStream | null> {
       // Chrome/Edge default-select the current tab in the prompt.
       // Other browsers ignore the hints; user still picks manually.
       video: {
+        // displaySurface is in the spec but the lib.dom MediaTrackConstraints
+        // type doesn't expose it yet — cast keeps us strict without lying.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         displaySurface: "browser",
       } as MediaTrackConstraints,
       audio: false,
+      // preferCurrentTab is Chromium-only and not in the standard
+      // DisplayMediaStreamOptions; same lib.dom-typing gap.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       preferCurrentTab: true,
     } as DisplayMediaStreamOptions);
@@ -762,7 +756,8 @@ async function tryGrabViaDisplayMedia(
     if (!track) return null;
     let bitmap: ImageBitmap | null = null;
     // ImageCapture is the cleanest path; fall back to a hidden
-    // <video> + drawImage where the API isn't exposed.
+    // <video> + drawImage where the API isn't exposed (Safari, older
+    // Firefox). ImageCapture isn't in lib.dom — feature-detect it.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const Ctor = (window as any).ImageCapture as
       | (new (track: MediaStreamTrack) => {
@@ -865,8 +860,9 @@ export async function buildBundle(
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
 
-  // SVGElement gets the same path — the silent-skip on SVG picks
-  // (e.g. an icon's <g>) was the "I see nothing" bug 2026-05-21.
+  // SVGElement gets the same path — without this, picking an SVG
+  // node (e.g. an icon's <g>) silently produced a bundle with
+  // neither `screenshot` nor `screenshotUnavailable` set.
   if (el instanceof HTMLElement || el instanceof SVGElement) {
     // 1. Compute crop region — context-sized, but CENTERED on the
     //    picked element. The previous implementation used the

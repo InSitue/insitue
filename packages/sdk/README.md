@@ -198,6 +198,94 @@ Then drop `<InSitueWidget />` once in your app root.
 
 ---
 
+## Public API
+
+The package ships three entry points:
+
+### `@insitue/sdk` (default)
+- `<InSitueCapture />` — the canonical widget. Auto-detects sink
+  (cloud when `projectKey` set, otherwise companion).
+- `<InSitue />` — backward-compat dev alias for the companion sink.
+  Equivalent to `<InSitueCapture sink={{ kind: "companion", port }} />`.
+- `InSitueCaptureProps`, `InSitueProps` — prop types.
+- `SDK_VERSION: string` — build-time-inlined package version.
+  Surfaced in the widget footer so a screenshot proves the build.
+
+### `@insitue/sdk/capture-only`
+- `mountCaptureOnly(opts): () => void` — imperative mount for non-React
+  apps (vanilla / Svelte / Vue). Returns a dispose function.
+- `CaptureOnlyOptions` — full options shape (sink, projectKey,
+  endpoint, onCapture, defaultPixelPerfect).
+- `CaptureSink` — the sink discriminated union the SDK accepts.
+
+### `@insitue/sdk/babel`
+- Default export — the Babel plugin that injects
+  `data-insitue-source="file:line:col"` onto intrinsic JSX
+  elements. Optional; only needed when your bundler doesn't
+  expose React fiber `_debugSource` (Vite, some Webpack setups).
+
+The bundle ships with React fiber resolution as the primary
+source resolver, falling back to the build-injected attribute,
+falling back to the nearest owning component. The selector is
+always present as the last-resort locator.
+
+## Stability
+
+The widget API (`<InSitueCapture />` props, `mountCaptureOnly`
+options) is the stable consumer surface. Internal modules
+(`capture.ts`, `picker.ts`, `client.ts`) are not — import paths
+under `@insitue/sdk/*` other than the three documented entry
+points may change at any time.
+
+The pre-0.3.0 chat-style overlay is removed; if you imported
+`<InSitue />` for that, the new behaviour is the unified capture
+widget in companion-sink mode. No separate session history, no
+in-overlay diff.
+
+## Versioning
+
+- **Major** — backwards-incompatible widget prop changes, removed
+  exports, changes to the auto-detection rules (e.g. a new prop
+  precedence), bundle-shape changes that need a `CAPTURE_SCHEMA_VERSION`
+  bump in `@insitue/capture-core`.
+- **Minor** — additive props, additive options, new exports, new
+  sink kinds, new optional features (e.g. `defaultPixelPerfect`).
+- **Patch** — bug fixes, browser-quirk workarounds, docs, internal
+  refactors, dep-bumps for transitive deps.
+
+The SDK pins its `CAPTURE_SCHEMA_VERSION` and `PROTOCOL_VERSION`
+against the companion. A mismatch is rejected at the WS handshake
+rather than silently degraded.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](../../SECURITY.md)
+in the repo root. Especially relevant for this package: anything
+that lets the widget submit captures from a non-host origin,
+that leaks the `projectKey` outside its Origin pin, or that lets
+a host-page script read the Shadow DOM overlay's internal state.
+
+The cloud sink ships `projectKey` (publishable, Origin-pinned,
+quota-gated). The companion sink connects loopback-only and
+authenticates via a per-session token written to
+`<project>/.insitue/session.json` by the companion at bind time.
+
+## Tests
+
+The package has a small unit suite covering bundle building, a
+Next/Image-specific regression, and a "don't render layer 2"
+DOM check.
+
+```bash
+pnpm test            # one-shot
+pnpm test:watch      # watch mode
+```
+
+Full integration coverage lives in `@insitue/companion`'s
+trust-boundary tests and the cloud-side autopilot suite (closed-
+source). If you make a change here that touches the
+SDK ↔ companion contract, run the companion's tests too.
+
 ## License
 
-MIT.
+MIT. See [LICENSE](./LICENSE).
