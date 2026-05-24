@@ -1,19 +1,33 @@
 {
   "name": "@insitue/claude-plugin",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Drive Claude (Code AND Desktop) from the InSitue browser overlay — pick an element in your app, claude reads the file and proposes the edit.",
+  "keywords": [
+    "insitue",
+    "claude",
+    "mcp",
+    "claude-code",
+    "claude-desktop",
+    "visual-feedback",
+    "browser-overlay"
+  ],
   "license": "MIT",
+  "homepage": "https://www.insitue.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/InSitue/insitue.git",
     "directory": "packages/claude-plugin"
+  },
+  "bugs": {
+    "url": "https://github.com/InSitue/insitue/issues"
   },
   "type": "module",
   "files": [
     ".claude-plugin",
     "commands",
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "exports": {
     ".": "./dist/mcp-server.js"

@@ -3,8 +3,8 @@
  *
  * Claude Code sets `CLAUDE_PROJECT_DIR` and runs us with `cwd:
  * ${CLAUDE_PROJECT_DIR}` (via plugin.json), so resolution is
- * trivial there. Claude Desktop has neither convention, so we
- * accept user input in three forms (in order of precedence):
+ * trivial there. Claude Desktop has neither convention, so we try
+ * the following in order of precedence:
  *
  *   1. `--project-dir <path>` argv flag (explicit, configured in
  *      `claude_desktop_config.json` args).
@@ -20,7 +20,7 @@
  * are not our problem to solve here.
  */
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 export interface ResolvedProjectDir {
   /** Absolute real path of the resolved project directory. */
@@ -100,7 +100,9 @@ export function resolveProjectDir(
 }
 
 /** True iff `target` is inside (or equal to) `root`. Both must be
- *  absolute. Uses realpath-style comparison to defeat `..` games. */
+ *  absolute. Uses realpath-style comparison to defeat `..` games.
+ *  Cross-platform: uses `path.sep` so the boundary check holds on
+ *  Windows (where separators are `\`) as well as POSIX. */
 export function isInsideProject(root: string, target: string): boolean {
   const r = realpathSafe(root);
   let t: string;
@@ -112,6 +114,6 @@ export function isInsideProject(root: string, target: string): boolean {
     t = resolve(target);
   }
   if (!isAbsolute(r) || !isAbsolute(t)) return false;
-  const rWithSep = r.endsWith("/") ? r : r + "/";
+  const rWithSep = r.endsWith(sep) ? r : r + sep;
   return t === r || t.startsWith(rWithSep);
 }

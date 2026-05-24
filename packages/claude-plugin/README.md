@@ -237,31 +237,82 @@ extensively to stderr; claude surfaces them in the transcript.
 
 The plugin is a stdio MCP server that:
 
-1. On startup, reads `${CLAUDE_PROJECT_DIR}/.insitue/session.json`
-   to find a running companion. If one's alive, reuse it.
-2. Otherwise spawns `npx -y @insitue/companion@latest dev` as a
-   child process, polls for the new `session.json` to appear,
-   then connects.
-3. Subscribes to the companion's WS broadcast channel. Every
-   pick the browser sends arrives here.
-4. Exposes two MCP tools:
-   - `insitue__next_pick` — long-polls until a pick lands
-     (default 5 min). Returns target + source + screenshot +
-     userNote.
-   - `insitue__list_recent_picks` — buffered picks since the
-     server started.
+1. On startup, resolves the project dir (`--project-dir` argv →
+   `INSITUE_PROJECT_DIR` env → `CLAUDE_PROJECT_DIR` env →
+   walk-up for `.insitue/session.json` → walk-up for
+   `package.json` → cwd).
+2. Reads `.insitue/session.json` to find a running companion.
+   If one's alive (PID up + port responsive), reuse it.
+3. Otherwise spawns `npx -y @insitue/companion@latest dev` as a
+   child process, polls for the new `session.json` to appear
+   (8 s ceiling), then connects.
+4. Subscribes to the companion's WS broadcast channel. Every
+   pick the browser sends arrives here, gets summarised, and
+   buffers (cap: 32) for the polling loop to pull.
 5. Auto-reconnects if the companion restarts (HMR, manual
    stop). The widget reconnects too.
 6. Cleans up on `process.exit` / `SIGTERM` — kills only the
    companion it spawned, leaves user-started companions
    untouched.
 
-The bridge **never writes files**. Claude does, via its native
-Edit tool. This keeps the InSitue trust boundary clean: the
-companion is the only thing that touches fs, and only after
-the user has approved a proposal in the terminal.
+### MCP tools exposed
+
+| Tool | Purpose |
+|---|---|
+| `next_pick` | Long-poll for the next browser pick (default 25 s; max 30 min). |
+| `list_recent_picks` | Up to N buffered picks since the MCP server started. |
+| `start_session` | Returns the operating instructions + current state. Desktop entry point. |
+| `end_session` | Cleanly disconnect: close WS, suppress reconnect, kill spawned companion, drop session file. |
+| `diagnose` | Health check — companion reachability, SDK + SWC-plugin versions + wiring, recommendations. |
+| `read_file` | Project-scoped file read. Desktop fallback (Code has native Read). |
+| `apply_edit` | Project-scoped string-replacement edit. Desktop fallback (Code has native Edit). |
+| `write_file` | Project-scoped full-file write. Desktop fallback. |
+
+All file tools resolve paths against the project dir and refuse
+anything that resolves outside it (realpath-checked, so `..` games
+are blocked). On Claude Code the agent prefers its native tools;
+the project-scoped ones exist primarily for Claude Desktop, which
+has no built-in file tools.
+
+### Trust boundary
+
+The companion is the only process that holds the user's edit
+authority — it spawns from the project dir, writes only inside it,
+and is gated by the WS handshake's loopback bind + per-session
+token. The MCP bridge here is a read-side subscriber that
+broadcasts picks into the chat. Writes still require the human
+in the terminal to say "yes" before the agent calls `apply_edit`
+(or its native equivalent).
 
 ---
+
+## Stability
+
+The plugin's MCP tool surface is what consumers depend on. We
+treat tool name/argument changes as breaking; descriptions and
+internal behaviour can evolve in patch releases.
+
+## Versioning
+
+- **Major** — backwards-incompatible changes to the MCP tool
+  surface (renames, removed tools, argument shape changes), or
+  changes that require the user to re-run `setup`.
+- **Minor** — additive tools, optional new arguments, new env
+  vars, new CLI subcommands.
+- **Patch** — bug fixes, docs, internal refactors, version-pin
+  bumps for transitive deps.
+
+The plugin pins the InSitue WS protocol version (`5` at the time
+of writing) against the companion. A mismatch is rejected at the
+handshake rather than silently degraded.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](../../SECURITY.md)
+in the repo root. Especially relevant for this package: anything
+that lets the bridge accept frames over a non-loopback bind, that
+lets `apply_edit` / `write_file` escape the resolved project dir,
+or that leaks the session token outside the local machine.
 
 ## License
 
