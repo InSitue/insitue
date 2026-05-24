@@ -1,16 +1,30 @@
 {
   "name": "@insitue/capture-core",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
   "publishConfig": {
     "access": "public"
   },
   "description": "The seam: pure, transport/agent/fs-free capture model shared by every InSitue vehicle.",
+  "keywords": [
+    "insitue",
+    "capture",
+    "schema",
+    "shared-types",
+    "react",
+    "dom",
+    "visual-feedback",
+    "source-resolution"
+  ],
   "license": "MIT",
+  "homepage": "https://www.insitue.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/InSitue/insitue.git",
     "directory": "packages/capture-core"
+  },
+  "bugs": {
+    "url": "https://github.com/InSitue/insitue/issues"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -23,7 +37,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm --dts --clean",

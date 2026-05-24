@@ -221,29 +221,43 @@ export class IssueTrackerSink implements CaptureSink {
  * Shared so the SDK client and the companion server agree on shape.
  * The companion zod-validates these at the trust boundary. */
 
+/** Client → server handshake. First frame on every WS connection;
+ *  the server checks `protocolVersion` matches and `token` matches
+ *  the per-session shared secret before accepting any other frame. */
 export interface HelloMsg {
   t: "hello";
   protocolVersion: typeof PROTOCOL_VERSION;
   token: string;
 }
+/** Server → client handshake ack. Carries the companion version so
+ *  the SDK can surface a mismatch warning in the overlay. */
 export interface HelloOkMsg {
   t: "hello-ok";
   companionVersion: string;
 }
+/** Client → server keepalive. Server echoes the same `nonce` in a
+ *  matching `PongMsg`; absence of pong drives reconnection. */
 export interface PingMsg {
   t: "ping";
   nonce: string;
 }
+/** Server → client keepalive reply. `nonce` matches the originating
+ *  `PingMsg` so the client can pair them and measure RTT. */
 export interface PongMsg {
   t: "pong";
   nonce: string;
 }
+/** Server → client refusal. `code` is machine-readable so the
+ *  overlay can render the right remediation hint. */
 export interface ErrorMsg {
   t: "error";
   code: "bad-token" | "bad-origin" | "bad-protocol" | "internal";
   message: string;
 }
 
+/** Client → server: submit a freshly built `CaptureBundle`. The
+ *  server validates it (zod), resolves source, and replies with a
+ *  matching `CaptureResolvedMsg` keyed by `bundle.id`. */
 export interface CaptureSubmitMsg {
   t: "capture";
   bundle: CaptureBundle;
@@ -306,7 +320,9 @@ export type AgentEvent =
   | { t: "agent-turn-complete"; turnId: string }
   | { t: "agent-error"; turnId: string; code: AgentErrorCode; message: string };
 
-/** Companion preflight result for the active provider/transport. */
+/** Server → client: companion preflight result for the active
+ *  provider/transport. `blockers` empty + `ready: true` means the
+ *  overlay can offer ASK. */
 export interface AgentStatusMsg {
   t: "agent-status";
   ready: boolean;
@@ -314,33 +330,50 @@ export interface AgentStatusMsg {
   warnings: string[];
   blockers: string[];
 }
+/** Server → client: a normalized `AgentEvent` from the active
+ *  provider. Wrapping the event keeps the WS envelope discriminated
+ *  by `t` while letting the inner `AgentEvent` evolve. */
 export interface AgentStreamMsg {
   t: "agent-stream";
   event: AgentEvent;
 }
+/** Server → client: the agent's proposed file edits for `turnId`,
+ *  diffed against disk and ready for human approval. `diff` is
+ *  unified-format text suitable for direct UI rendering. */
 export interface ChangesetProposedMsg {
   t: "changeset-proposed";
   turnId: string;
   files: Array<{ file: string; diff: string; bytes: number }>;
 }
+/** Server → client: the changeset for `turnId` was written to disk.
+ *  `checkpointRef` is the opaque handle the companion uses to undo
+ *  this specific application later. */
 export interface ChangesetAppliedMsg {
   t: "changeset-applied";
   turnId: string;
   files: string[];
   checkpointRef: string;
 }
+/** Server → client: a previously applied changeset for `turnId` was
+ *  undone. `restored` lists every file the companion rewrote back. */
 export interface AgentUndoneMsg {
   t: "agent-undone";
   turnId: string;
   restored: string[];
 }
 
+/** Client → server: user submitted an ASK for a bundle. Drives the
+ *  in-overlay headless agent (or routes externally — see
+ *  `AgentAskExternalMsg` for protocol v5 routing). */
 export interface AgentTurnMsg {
   t: "agent-turn";
   turnId: string;
   bundleId: string;
   userMessage: string;
 }
+/** Client → server: user accepted or rejected a proposed changeset.
+ *  `approve` triggers write + checkpoint; `reject` discards the
+ *  proposal without touching disk. */
 export interface AgentDecisionMsg {
   t: "agent-decision";
   turnId: string;
@@ -349,10 +382,14 @@ export interface AgentDecisionMsg {
   files?: string[];
   reason?: string;
 }
+/** Client → server: stop the agent mid-turn. Best-effort — the
+ *  provider may have already produced output that's about to arrive. */
 export interface AgentCancelMsg {
   t: "agent-cancel";
   turnId: string;
 }
+/** Client → server: undo the changeset for `turnId`, restoring files
+ *  to their pre-application contents from the checkpoint. */
 export interface AgentUndoMsg {
   t: "agent-undo";
   turnId: string;
@@ -367,10 +404,14 @@ export interface AgentCommitSessionMsg {
   t: "agent-commit-session";
   message?: string;
 }
+/** Server → client: ack for `AgentUndoSessionMsg`. Lists every file
+ *  restored across all rolled-back checkpoints. */
 export interface AgentSessionUndoneMsg {
   t: "agent-session-undone";
   restored: string[];
 }
+/** Server → client: ack for `AgentCommitSessionMsg`. `commit` is the
+ *  short sha of the newly created commit. */
 export interface AgentSessionCommittedMsg {
   t: "agent-session-committed";
   /** Short commit sha. */
@@ -418,7 +459,8 @@ export interface SubscribersAttachedMsg {
   count: number;
 }
 
-/** Client→server messages. */
+/** Discriminated union of every client → server WS frame.
+ *  Consumers exhaustively `switch (msg.t)` to handle each shape. */
 export type ClientMessage =
   | HelloMsg
   | PingMsg
@@ -430,7 +472,8 @@ export type ClientMessage =
   | AgentUndoMsg
   | AgentUndoSessionMsg
   | AgentCommitSessionMsg;
-/** Server→client messages. */
+/** Discriminated union of every server → client WS frame.
+ *  Consumers exhaustively `switch (msg.t)` to handle each shape. */
 export type ServerMessage =
   | HelloOkMsg
   | PongMsg
