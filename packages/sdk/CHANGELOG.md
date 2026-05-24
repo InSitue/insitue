@@ -9,6 +9,11 @@
 - **Code quality:** each `eslint-disable-next-line` now carries an
   inline justification (browser API gaps in `lib.dom`,
   intentional dev console output, stable-closure dep exclusion).
+- **Cleanup:** swept past-tense storytelling and internal references
+  from `capture.ts` JSDoc — removed a `~/.claude/plans/...` local-
+  machine path leak, removed dated "verified on `<internal-app>`
+  YYYY-MM-DD" annotations, and rewrote the "removed feature" comment
+  block as a forward-looking explanation of the current design.
 - **Metadata:** included `CHANGELOG.md` in the published tarball.
 
 ## 0.4.x and earlier
