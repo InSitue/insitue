@@ -21,13 +21,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { WebSocket } from "ws";
-
-/** v1 protocol number — must match server.PROTOCOL_VERSION. We
- *  re-declare here rather than importing from server.ts to keep
- *  the CLI bundle independent of the orchestrator + zod tree
- *  (faster cold start). The version check in the hello handshake
- *  catches a mismatch loudly. */
-const PROTOCOL_VERSION = 2;
+import { PROTOCOL_VERSION } from "@insitue/capture-core";
 
 interface SessionFile {
   token: string;

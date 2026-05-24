@@ -109,6 +109,99 @@ a snippet), broadcasts `{ t: "broadcast-capture", bundle,
 resolved }` to all subscribers. Subscribers (e.g. the
 claude-plugin MCP server) deliver to `claude`.
 
+## Public API
+
+The package is primarily a CLI but also exports a programmatic
+surface for embedders / tests:
+
+```ts
+import { startCompanion, COMPANION_VERSION } from "@insitue/companion";
+
+const server = startCompanion({
+  port: 5747,
+  root: process.cwd(),
+  origins: [],
+  allowLocalhost: true,
+});
+// server is a node:http Server — call .close() to stop.
+```
+
+Exports:
+- `startCompanion(opts: CompanionOptions): Server` — bind a
+  companion to a port. Throws if `NODE_ENV=production`.
+- `COMPANION_VERSION: string` — build-time-inlined package version.
+- `CompanionOptions` — the full options shape.
+- `AgentTransport` — `"cli-headless" | "mcp" | "sdk"`.
+- `AgentProvider` — re-exported from `@insitue/agent-core` for
+  tests that want to inject a deterministic provider.
+
+## Closed-source dependency disclosure
+
+`@insitue/companion` depends on
+[`@insitue/agent-core`](https://www.npmjs.com/package/@insitue/agent-core)
+— a closed-source package that holds the agent edit loop
+(claude-code transports, proposal building, edit gateway, git
+checkpoint mechanics). The companion ships thin shims under
+`src/agent/` and `src/edit/` that re-export from agent-core so
+import paths and the regression test layout stay stable. The
+trust boundary documented above (loopback, token, Origin pin,
+NODE_ENV-prod refusal) is entirely in this MIT-licensed package
+— what crosses into agent-core is already-authenticated frames
+on the WS.
+
+If full source-level audit matters for your use case, you can
+audit everything inbound to `agent-core` here (`server.ts`),
+treat the agent edit loop as a black box, and trust that the
+file operations it triggers go through your normal git review.
+
+## Stability
+
+- `startCompanion()` signature, `CompanionOptions`, and the
+  `insitue dev` / `insitue connect` CLI flags are the stable
+  consumer surface.
+- The WS wire format is pinned by `PROTOCOL_VERSION` in
+  `@insitue/capture-core` and **rejects mismatches** at the
+  handshake. Bumping it is a breaking change for the SDK,
+  claude-plugin, and any subscriber.
+- `agent-core` exports re-exported through the local shims
+  (`src/agent/**`, `src/edit/**`) are NOT a stable surface —
+  prefer `startCompanion()` if you're embedding.
+
+## Versioning
+
+- **Major** — breaking changes to `startCompanion()` /
+  `CompanionOptions`, CLI flag removals/renames, or
+  `PROTOCOL_VERSION` bump (forces consumer pins).
+- **Minor** — new CLI flags, additive options, additive WS
+  message types (server backward-compatible).
+- **Patch** — bug fixes, doc updates, transitive dep bumps.
+
+## Tests
+
+```bash
+pnpm test
+```
+
+Native Node `--test` suite covering the WS handshake, capture
+resolution, proposal flow, terminal-pipe broadcast, and #162
+external-ask routing. Trust-boundary regressions land here
+first — if you're changing `server.ts`, run the suite and add
+to it.
+
+## Security
+
+Report vulnerabilities privately — see [SECURITY.md](../../SECURITY.md)
+in the repo root. Especially relevant for this package:
+
+- Any path that lets a non-loopback connection complete the
+  handshake.
+- Any path that lets a foreign Origin send authenticated frames
+  (the per-session token + Origin pin are the auth boundary).
+- Any path that lets the edit gateway write outside `opts.root`.
+- Token leakage from `.insitue/session.json` (the auto-emitted
+  `.gitignore` is what stops it from committing — the file's
+  permission scope is the user's session).
+
 ## License
 
-MIT.
+MIT. See [LICENSE](./LICENSE).

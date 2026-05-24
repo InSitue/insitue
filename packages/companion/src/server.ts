@@ -165,8 +165,10 @@ export function startCompanion(opts: CompanionOptions): Server {
   // to it that ignores the whole `.insitue/` directory — so the
   // first time the companion runs in a project, the token never
   // leaks into git even if the user has zero existing gitignore
-  // discipline. NOTE (M1): tighten delivery so only the dev server
-  // — not any local process — can obtain it.
+  // discipline. Delivery scope is the local filesystem: any process
+  // running as the user can read it, which matches the trust model
+  // (loopback + this user's session). The token + loopback bind are
+  // what stop a foreign Origin or remote host from connecting.
   const token = randomBytes(24).toString("base64url");
   const sessionDir = join(opts.root, ".insitue");
   mkdirSync(sessionDir, { recursive: true });
