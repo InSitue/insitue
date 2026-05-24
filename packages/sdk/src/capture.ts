@@ -680,10 +680,14 @@ async function ensureDisplayMediaStream(): Promise<MediaStream | null> {
       // Chrome/Edge default-select the current tab in the prompt.
       // Other browsers ignore the hints; user still picks manually.
       video: {
+        // displaySurface is in the spec but the lib.dom MediaTrackConstraints
+        // type doesn't expose it yet — cast keeps us strict without lying.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         displaySurface: "browser",
       } as MediaTrackConstraints,
       audio: false,
+      // preferCurrentTab is Chromium-only and not in the standard
+      // DisplayMediaStreamOptions; same lib.dom-typing gap.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       preferCurrentTab: true,
     } as DisplayMediaStreamOptions);
@@ -762,7 +766,8 @@ async function tryGrabViaDisplayMedia(
     if (!track) return null;
     let bitmap: ImageBitmap | null = null;
     // ImageCapture is the cleanest path; fall back to a hidden
-    // <video> + drawImage where the API isn't exposed.
+    // <video> + drawImage where the API isn't exposed (Safari, older
+    // Firefox). ImageCapture isn't in lib.dom — feature-detect it.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const Ctor = (window as any).ImageCapture as
       | (new (track: MediaStreamTrack) => {
