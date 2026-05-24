@@ -1,22 +1,39 @@
 {
   "name": "@insitue/companion",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "type": "module",
   "publishConfig": {
     "access": "public"
   },
   "description": "Local companion process: loopback WS, project sandbox, agent edit gateway.",
+  "keywords": [
+    "insitue",
+    "companion",
+    "websocket",
+    "loopback",
+    "claude",
+    "agent",
+    "edit-gateway",
+    "dev-tool"
+  ],
   "license": "MIT",
+  "homepage": "https://www.insitue.com",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/InSitue/insitue.git",
     "directory": "packages/companion"
   },
+  "bugs": {
+    "url": "https://github.com/InSitue/insitue/issues"
+  },
   "bin": {
     "insitue": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsup src/cli.ts src/cli-connect.ts src/server.ts src/agent/proposals.ts src/agent/claude-code/normalize.ts src/agent/claude-code/mcp-server.ts src/edit/gateway.ts src/edit/mutator.ts src/edit/git.ts --format esm --dts --clean --external ws --external commander --external zod --external execa --external diff --external @modelcontextprotocol/sdk --external @anthropic-ai/claude-agent-sdk",
