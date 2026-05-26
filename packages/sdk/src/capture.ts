@@ -119,17 +119,17 @@ async function renderViewportCrop(
 ): Promise<{
   dataUrl: string | null;
   /** True when the rasterised canvas's 16-pixel sample grid hit a
-   *  single colour. Caller decides: when layer-2 is available, treat
-   *  this as a failed rasterise and escalate; when layer-2 is off
-   *  (dev overlay), trust it (legitimate uniform-colour crops happen,
-   *  e.g. a small element inside a solid-background section, and a
-   *  uniform thumbnail beats no thumbnail). */
+   *  single colour. */
   looksBlank: boolean;
   /** 0..1 — fraction of the sample grid hitting the most-common
-   *  pixel. 1.0 = `looksBlank: true`. Threaded through to
-   *  `captureDiagnostics.shippedBlankScore` (insitue#10). */
+   *  pixel. 1.0 = `looksBlank: true`. */
   blankScore: number;
   failedImages: Set<HTMLImageElement>;
+  /** When set, the screenshot ISN'T an actual rasterise — it's the
+   *  labeled placeholder we paint when html-to-image throws (#10
+   *  / 0.5.0 — no silent failures). The string is the underlying
+   *  error, suitable for the bundle's qualityNote. */
+  placeholderReason?: string;
 }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
@@ -157,17 +157,55 @@ async function renderViewportCrop(
   //    absolutely-positioned <img>s (the next/image fill pattern)
   //    its foreignObject pipeline drops the image and shows the
   //    parent's background instead. We'll patch over that next.
-  const fullCanvas = await toCanvas(document.documentElement, {
-    pixelRatio,
-    cacheBust: true,
-    backgroundColor,
-    imagePlaceholder: IMAGE_PLACEHOLDER,
-    filter: (n) =>
-      !(
-        n instanceof Element &&
-        n.closest?.("#insitue-root, [data-insitue-layer]")
-      ),
-  });
+  //
+  //    `toCanvas` can throw for many reasons — CORS-tainted image
+  //    serialization, malformed SVG namespaces, foreignObject
+  //    parser errors. The widget's core flow rides on us NEVER
+  //    throwing from here: if html-to-image fails entirely, paint
+  //    a labeled placeholder ourselves so the user still sees
+  //    something shaped like their selection (insitue#10 / 0.5.0).
+  let fullCanvas: HTMLCanvasElement | null = null;
+  let htiError: Error | null = null;
+  try {
+    fullCanvas = await toCanvas(document.documentElement, {
+      pixelRatio,
+      cacheBust: true,
+      backgroundColor,
+      imagePlaceholder: IMAGE_PLACEHOLDER,
+      filter: (n) =>
+        !(
+          n instanceof Element &&
+          n.closest?.("#insitue-root, [data-insitue-layer]")
+        ),
+    });
+  } catch (e) {
+    htiError = e instanceof Error ? e : new Error(String(e));
+    // Helpful for end-user dogfooding — never want a silent error.
+    // eslint-disable-next-line no-console
+    console.error("[insitue] html-to-image threw:", htiError);
+  }
+
+  if (!fullCanvas) {
+    // html-to-image gave up. Paint a labeled placeholder onto the
+    // out canvas so the bundle ships a screenshot (even if
+    // honestly degraded) rather than nothing. The qualityNote on
+    // the bundle tells the reviewer why.
+    const reason = htiError?.message ?? "rasterise failed (no error message)";
+    paintCapturePlaceholder(
+      ctx,
+      out.width,
+      out.height,
+      backgroundColor,
+      reason,
+    );
+    return {
+      dataUrl: out.toDataURL("image/png"),
+      looksBlank: false,
+      blankScore: 0,
+      failedImages,
+      placeholderReason: reason,
+    };
+  }
 
   // 2. Composite html-to-image output onto our crop canvas.
   const sx = window.scrollX;
@@ -429,6 +467,44 @@ function computeObjectFitSource(
  *  the layer-2 `getDisplayMedia` escalation — so the user gets a
  *  pixel-perfect capture (with permission) instead of a silent
  *  empty image. */
+/** Paint a labeled placeholder when the html-to-image render fails
+ *  entirely. The bundle still ships a screenshot — a clearly-labeled
+ *  one — instead of nothing. Honest degradation: better a "we
+ *  couldn't render this" thumbnail than the widget feeling broken.
+ *  (insitue#10 / 0.5.0 — no silent failures in the core flow.) */
+function paintCapturePlaceholder(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bg: string,
+  reason: string,
+): void {
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  // Diagonal hatch so it doesn't look like a real screenshot.
+  ctx.strokeStyle = "rgba(120,120,140,0.18)";
+  ctx.lineWidth = Math.max(1, Math.round(w / 280));
+  const step = Math.max(16, Math.round(w / 28));
+  for (let x = -h; x < w + h; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + h, h);
+    ctx.stroke();
+  }
+  // Label box.
+  const fontPx = Math.max(11, Math.round(w / 32));
+  ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  const title = "Screenshot couldn't be rendered";
+  const sub = reason.length > 90 ? reason.slice(0, 87) + "…" : reason;
+  ctx.fillText(title, w / 2, h / 2 - fontPx * 0.7);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.font = `400 ${Math.max(10, Math.round(fontPx * 0.78))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillText(sub, w / 2, h / 2 + fontPx * 0.55);
+}
+
 function detectUnrenderedImages(
   cropCtx: CanvasRenderingContext2D,
   cropRect: DOMRect,
@@ -800,13 +876,20 @@ export async function buildBundle(
           // we still ship: small picks of solid-color surfaces are
           // legitimately uniform, and the qualityNote tells the
           // reviewer what we saw.
-          const qualityNote = r.looksBlank
-            ? "captured image looks uniform — small picks against solid backgrounds can read as blank, or the embed step may have dropped an element"
-            : quality.unembeddableImages > 0 ||
-                quality.hasVideo ||
-                quality.hasCanvas
-              ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
-              : undefined;
+          //
+          // `placeholderReason` (set when html-to-image threw and
+          // we painted the labeled placeholder) takes priority — it
+          // tells the reviewer the screenshot is structurally a
+          // placeholder, not a real capture.
+          const qualityNote = r.placeholderReason
+            ? `screenshot couldn't be rendered: ${r.placeholderReason}`
+            : r.looksBlank
+              ? "captured image looks uniform — small picks against solid backgrounds can read as blank, or the embed step may have dropped an element"
+              : quality.unembeddableImages > 0 ||
+                  quality.hasVideo ||
+                  quality.hasCanvas
+                ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
+                : undefined;
           screenshot = {
             mime: "image/png",
             dataUrl: r.dataUrl,
