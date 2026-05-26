@@ -212,6 +212,45 @@ function defaultDeliver(draft: IssueDraft): void {
   }
 }
 
+/** Debug-only crop overlay (insitue#10 quick win). When `__insitueDebug__`
+ *  is truthy on `window`, draws the actual crop rectangle used by the
+ *  capture pipeline as a translucent outlined box for 500ms. Lets a
+ *  dogfooder see "did the SDK capture what I picked?" at a glance —
+ *  the #1 root cause for "blank-looking screenshot" reports is the
+ *  crop missing the element (sticky/fixed elements, post-layout shift).
+ *
+ *  No-op when the flag is unset; cleaned up automatically. */
+function showCropDebugOverlay(
+  cropRect: { x: number; y: number; width: number; height: number },
+): void {
+  if (
+    typeof window === "undefined" ||
+    !(window as unknown as { __insitueDebug__?: unknown }).__insitueDebug__
+  ) {
+    return;
+  }
+  const el = document.createElement("div");
+  el.setAttribute("data-insitue-layer", "debug-crop");
+  el.style.cssText = [
+    "position:fixed",
+    `left:${cropRect.x}px`,
+    `top:${cropRect.y}px`,
+    `width:${cropRect.width}px`,
+    `height:${cropRect.height}px`,
+    "pointer-events:none",
+    "z-index:2147483647",
+    "border:2px dashed #7c3aed",
+    "background:rgba(124,58,237,0.08)",
+    "box-sizing:border-box",
+    "transition:opacity 200ms",
+  ].join(";");
+  document.body.appendChild(el);
+  setTimeout(() => {
+    el.style.opacity = "0";
+  }, 300);
+  setTimeout(() => el.remove(), 600);
+}
+
 type Phase = "idle" | "picking" | "compose" | "sending" | "sent";
 
 /** companion-sink connection state, surfaced in the panel. */
@@ -436,7 +475,9 @@ function CaptureApp(props: AppProps) {
       setPhase("picking");
       const sel = await beginPick("element").catch(() => null);
       if (sel) {
-        setBundle(await buildBundle(sel));
+        const b = await buildBundle(sel);
+        if (b.captureDiagnostics) showCropDebugOverlay(b.captureDiagnostics.cropRect);
+        setBundle(b);
         setPhase("compose");
       } else {
         setPhase("compose");
@@ -520,7 +561,9 @@ function CaptureApp(props: AppProps) {
         setPhase("idle");
         return;
       }
-      setBundle(await buildBundle(sel));
+      const b = await buildBundle(sel);
+      if (b.captureDiagnostics) showCropDebugOverlay(b.captureDiagnostics.cropRect);
+      setBundle(b);
       setPhase("compose");
     } catch {
       setPhase("idle");
@@ -913,35 +956,46 @@ function CaptureApp(props: AppProps) {
               `Screenshot unavailable — ${bundle.screenshotUnavailable}`,
             )
           : null,
-      // Tab-capture upgrade prompt — dev sink only. End users on the
-      // cloud sink are reporting a bug, not optimising screenshot
-      // fidelity; asking them to grant getDisplayMedia mid-report is
-      // a trust ask that costs more reports than it improves. The
-      // imperfection still rides along in `bundle.screenshot.qualityNote`
-      // for reviewers to see in the ticket UI.
-      isDev && bundle?.screenshot?.qualityNote && !tabCaptureActive
-        ? h(
-            "div",
-            {
-              style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:${C.warnBg};border:1px solid ${C.warnLine};color:${C.warnInk};border-radius:10px;font-size:12px;margin-bottom:12px`,
-            },
-            [
-              h(
-                "span",
-                { style: "flex:1" },
-                "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.",
-              ),
-              h(
-                "button",
-                {
-                  onClick: () => void retryWithPixelPerfect(),
-                  style: `all:unset;cursor:pointer;color:${C.accentSolid};font-weight:600;padding:2px 8px;border:1px solid ${C.line};border-radius:6px;background:${C.surface}`,
-                },
-                "Enable",
-              ),
-            ],
-          )
-        : null,
+      // Tab-capture upgrade prompt. Two-tier policy:
+      //   - **Dev sink** (companion): show on any qualityNote — devs
+      //     dogfooding the local loop want the cleanest screenshot.
+      //   - **Cloud sink** (end users reporting bugs): show ONLY when
+      //     the screenshot is actually blank (insitue#10). Generic
+      //     fidelity nags during a bug report cost more reports than
+      //     they improve, but a BLANK is the bug they're losing visibility
+      //     into — they should see the retry option.
+      // `captureDiagnostics.shippedLooksBlank` is the v4 signal; before
+      // v4 we fall back to a regex on the qualityNote string.
+      (() => {
+        if (tabCaptureActive || !bundle?.screenshot?.qualityNote) return null;
+        const looksBlank =
+          bundle.captureDiagnostics?.shippedLooksBlank ??
+          /blank/i.test(bundle.screenshot.qualityNote);
+        if (!isDev && !looksBlank) return null;
+        const label = looksBlank
+          ? "Screenshot looks blank. Enable tab capture to retry pixel-perfect."
+          : "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.";
+        const bg = looksBlank ? C.warnBg : C.warnBg;
+        const line = looksBlank ? C.warnLine : C.warnLine;
+        const ink = looksBlank ? C.warnInk : C.warnInk;
+        return h(
+          "div",
+          {
+            style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:${bg};border:1px solid ${line};color:${ink};border-radius:10px;font-size:12px;margin-bottom:12px`,
+          },
+          [
+            h("span", { style: "flex:1" }, label),
+            h(
+              "button",
+              {
+                onClick: () => void retryWithPixelPerfect(),
+                style: `all:unset;cursor:pointer;color:${C.accentSolid};font-weight:600;padding:2px 8px;border:1px solid ${C.line};border-radius:6px;background:${C.surface}`,
+              },
+              looksBlank ? "Retry pixel-perfect" : "Enable",
+            ),
+          ],
+        );
+      })(),
       tabCaptureActive
         ? h(
             "div",
