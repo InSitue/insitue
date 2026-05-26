@@ -1,5 +1,36 @@
 # @insitue/sdk
 
+## 0.4.17
+
+- **Capture telemetry (insitue#10 Phase 1).** Every bundle now ships
+  with a `captureDiagnostics` field describing the per-layer attempt
+  outcomes (success/blank/error/skipped + duration), the final-output
+  blank verdict + score, the crop rect vs picked-element bbox, and
+  in-crop content tripwires (video/canvas/iframe/Shadow DOM depth).
+  Lets us debug single bad captures in isolation AND aggregate to
+  find the patterns driving inconsistent blank screenshots.
+- **Schema v4 (additive).** `CAPTURE_SCHEMA_VERSION = 4`. Existing v3
+  receivers ignore the new field. Cloud receivers must be on
+  `@insitue/capture-core@^0.4.0` (or accept v4 via the
+  `ACCEPTED_SCHEMA_VERSIONS` widening) to ingest these bundles.
+- **Silent blanks now surfaced.** When the shipped screenshot
+  `looksBlank` (the 16-pixel sample heuristic that previously only
+  gated layer-2 escalation), the bundle's `screenshot.qualityNote`
+  says so — three branches updated. Reviewers no longer see a
+  silent blank thumbnail.
+- **Layer-2 blank check.** `getDisplayMedia` output now runs through
+  the same sample heuristic. Chrome/macOS Sonoma can return all-
+  black streams under certain conditions; previously the SDK
+  reported `source: "display-media", success`. Now it falls through
+  to the degrade path with a `looksBlank` note.
+- **Retry button on blank (cloud sink).** End users seeing a blank
+  thumbnail get a "Retry pixel-perfect" affordance — fires
+  `getDisplayMedia` then re-picks. Dev-sink behavior unchanged.
+- **`window.__insitueDebug__ = true`** draws the actual crop rect on
+  screen for ~500ms after every capture. Lets a dogfooder
+  immediately distinguish "the crop missed the element" from "the
+  rasterise was empty." No-op when unset.
+
 ## 0.4.16
 
 - **Docs:** added Public API, Stability, Versioning, Security, and
