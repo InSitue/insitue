@@ -982,8 +982,18 @@ export async function buildBundle(
             source: "rasterise",
             qualityNote: `${reason} couldn't be embedded — grant tab capture for pixel-perfect screenshots`,
           };
+        } else if (skipLayer1) {
+          // Rasterise was deliberately skipped (alwaysPixelPerfect),
+          // so the only failure mode here is the user declining the
+          // tab-share prompt (or the browser not supporting it).
+          // Reporting "rasterise failed" would be technically false
+          // and reads as "the SDK is broken" — see #61.
+          screenshotUnavailable = supportsDisplayMedia()
+            ? "tab capture was declined — grant it for pixel-perfect screenshots, or turn off “Always pixel-perfect” in the gear to fall back to the rasterise path"
+            : "tab capture unsupported in this browser — turn off “Always pixel-perfect” in the gear to fall back to the rasterise path";
         } else {
-          // Both paths failed — be honest.
+          // Layer 1 was attempted and produced nothing usable; layer 2
+          // also declined or unsupported. Honest "both paths failed".
           screenshotUnavailable = supportsDisplayMedia()
             ? "rasterise failed — grant tab capture for pixel-perfect screenshots"
             : "rasterise failed and tab capture unsupported in this browser";
