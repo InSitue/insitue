@@ -37,17 +37,10 @@ import {
 } from "@insitue/capture-core";
 import { installRuntimeCollectors } from "./runtime.js";
 import { beginPick } from "./picker.js";
-import {
-  buildBundle,
-  onDisplayMediaChange,
-  retryDisplayMedia,
-  stopDisplayMedia,
-} from "./capture.js";
-import {
-  hasPersistedCaptureSettings,
-  setCaptureSettings,
-} from "./capture-settings.js";
+import { buildBundle } from "./capture.js";
 import { CompanionClient } from "./client.js";
+
+export { buildBundle };
 
 /** Where captures go. Auto-detected from `projectKey` if omitted. */
 export type CaptureSink =
@@ -77,15 +70,6 @@ export interface CaptureOnlyOptions {
    * companion for testing. Most callers leave this undefined.
    */
   sink?: CaptureSink;
-  /**
-   * Force the pixel-perfect (`getDisplayMedia`) path for every
-   * capture from mount. Costs a one-time tab-share permission per
-   * session in exchange for screenshots that are guaranteed to
-   * match what the user actually saw — bypasses every html-to-image
-   * quirk. Use in dev/dogfood where capture quality matters more
-   * than the permission UX.
-   */
-  defaultPixelPerfect?: boolean;
 }
 
 const DEFAULT_INGEST = "https://www.insitue.com/api/v1/capture";
@@ -396,8 +380,6 @@ function CaptureApp(props: AppProps) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [bundle, setBundle] = useState<CaptureBundle | null>(null);
   const [note, setNote] = useState("");
-  const [tabCaptureActive, setTabCaptureActive] = useState(false);
-  const [tabCaptureDenied, setTabCaptureDenied] = useState(false);
   const [companionState, setCompanionState] = useState<CompanionState>(
     isDev ? "connecting" : "idle",
   );
@@ -455,35 +437,6 @@ function CaptureApp(props: AppProps) {
     };
   }, [isDev, props.sink]);
 
-  useEffect(() => {
-    return onDisplayMediaChange((active, reason) => {
-      setTabCaptureActive(active);
-      if (reason === "denied") setTabCaptureDenied(true);
-      if (reason === "granted") setTabCaptureDenied(false);
-    });
-  }, []);
-
-  // Re-pick after enabling tab capture — rebuilds the bundle so the
-  // pixel-perfect path runs without needing the user to re-select.
-  const retryWithPixelPerfect = async () => {
-    if (!bundle?.target?.selector) {
-      await retryDisplayMedia();
-      return;
-    }
-    const granted = await retryDisplayMedia();
-    if (granted) {
-      setPhase("picking");
-      const sel = await beginPick("element").catch(() => null);
-      if (sel) {
-        const b = await buildBundle(sel);
-        if (b.captureDiagnostics) showCropDebugOverlay(b.captureDiagnostics.cropRect);
-        setBundle(b);
-        setPhase("compose");
-      } else {
-        setPhase("compose");
-      }
-    }
-  };
 
   const sink = new IssueTrackerSink(async (draft) => {
     (globalThis as Record<string, unknown>).__insitue_capture__ = {
@@ -956,70 +909,20 @@ function CaptureApp(props: AppProps) {
               `Screenshot unavailable — ${bundle.screenshotUnavailable}`,
             )
           : null,
-      // Tab-capture upgrade prompt. Two-tier policy:
-      //   - **Dev sink** (companion): show on any qualityNote — devs
-      //     dogfooding the local loop want the cleanest screenshot.
-      //   - **Cloud sink** (end users reporting bugs): show ONLY when
-      //     the screenshot is actually blank (insitue#10). Generic
-      //     fidelity nags during a bug report cost more reports than
-      //     they improve, but a BLANK is the bug they're losing visibility
-      //     into — they should see the retry option.
-      // `captureDiagnostics.shippedLooksBlank` is the v4 signal; before
-      // v4 we fall back to a regex on the qualityNote string.
-      (() => {
-        if (tabCaptureActive || !bundle?.screenshot?.qualityNote) return null;
-        const looksBlank =
-          bundle.captureDiagnostics?.shippedLooksBlank ??
-          /blank/i.test(bundle.screenshot.qualityNote);
-        if (!isDev && !looksBlank) return null;
-        const label = looksBlank
-          ? "Screenshot looks blank. Enable tab capture to retry pixel-perfect."
-          : "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.";
-        const bg = looksBlank ? C.warnBg : C.warnBg;
-        const line = looksBlank ? C.warnLine : C.warnLine;
-        const ink = looksBlank ? C.warnInk : C.warnInk;
-        return h(
-          "div",
-          {
-            style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:${bg};border:1px solid ${line};color:${ink};border-radius:10px;font-size:12px;margin-bottom:12px`,
-          },
-          [
-            h("span", { style: "flex:1" }, label),
-            h(
-              "button",
-              {
-                onClick: () => void retryWithPixelPerfect(),
-                style: `all:unset;cursor:pointer;color:${C.accentSolid};font-weight:600;padding:2px 8px;border:1px solid ${C.line};border-radius:6px;background:${C.surface}`,
-              },
-              looksBlank ? "Retry pixel-perfect" : "Enable",
-            ),
-          ],
-        );
-      })(),
-      tabCaptureActive
+      // When the SDK couldn't faithfully capture some region of the
+      // crop (cross-origin iframe, video frame, canvas pixels, non-
+      // CORS image), `qualityNote` describes what got placeholdered.
+      // We show that inline so the reviewer knows the screenshot is
+      // structurally complete but visually imperfect — no retry
+      // prompts, no permission asks. (Permission-based escalation
+      // removed in the layer-1-only redesign.)
+      bundle?.screenshot?.qualityNote
         ? h(
             "div",
             {
-              style: `display:flex;align-items:center;gap:8px;padding:7px 11px;background:${C.goodBg};border:1px solid ${C.goodLine};color:${C.good};border-radius:10px;font-size:11.5px;margin-bottom:12px`,
+              style: `padding:9px 11px;background:${C.surface2};border:1px solid ${C.line};color:${C.sub};border-radius:10px;font-size:12px;margin-bottom:12px`,
             },
-            [
-              h("span", {
-                style: `width:8px;height:8px;border-radius:50%;background:${C.good};box-shadow:0 0 6px ${C.good}`,
-              }),
-              h(
-                "span",
-                { style: "flex:1" },
-                "Tab capture active — screenshots are pixel-perfect.",
-              ),
-              h(
-                "button",
-                {
-                  onClick: () => stopDisplayMedia("user"),
-                  style: `all:unset;cursor:pointer;color:${C.good};font-weight:600;padding:2px 6px`,
-                },
-                "Stop",
-              ),
-            ],
+            bundle.screenshot.qualityNote,
           )
         : null,
       h("textarea", {
@@ -1112,21 +1015,6 @@ function CaptureApp(props: AppProps) {
 export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   installRuntimeCollectors();
   const sink = resolveSink(opts);
-  // Pixel-perfect default: explicit option wins. Otherwise, the
-  // companion sink (= dev mode) opts in on first mount so hero
-  // banners / motion components / text-over-image captures don't
-  // suffer html-to-image's z-order trade-offs. We only set this on
-  // first mount (no persisted settings yet) — if the dev later
-  // turns it off via the widget's gear, that choice sticks.
-  if (opts.defaultPixelPerfect === true) {
-    setCaptureSettings({ alwaysPixelPerfect: true });
-  } else if (
-    opts.defaultPixelPerfect !== false &&
-    sink.kind === "companion" &&
-    !hasPersistedCaptureSettings()
-  ) {
-    setCaptureSettings({ alwaysPixelPerfect: true });
-  }
   const host = document.createElement("div");
   host.id = "insitue-capture-root";
   host.setAttribute("data-insitue", "");

@@ -1,5 +1,58 @@
 # @insitue/sdk
 
+## 0.5.0 — Layer-1-only capture (breaking)
+
+Layer 2 (`getDisplayMedia` tab capture) is gone. The widget now has
+ONE capture path: html-to-image rasterise. No permission prompts.
+No "tab share declined" dead-ends. No retry buttons. No
+"alwaysPixelPerfect" toggle. Every click captures.
+
+When html-to-image can't faithfully capture a region (cross-origin
+iframe content, video frames, canvas pixels, non-CORS images), the
+existing manual-overlay path inside `renderViewportCrop` shows a
+placeholder for that region while the rest of the screenshot still
+ships. A `qualityNote` describes what got placeholdered so reviewers
+know the capture is structurally complete but visually imperfect on
+those specific regions.
+
+### Why
+
+Real-world dogfooding showed the layer-2-first approach (companion
+sink default) creates a UX dead-end: decline tab share once and
+every subsequent capture produces nothing for 60 seconds. The
+permission-based escalation was the dominant source of "the widget
+doesn't work" reports. For a product whose core flow rides on the
+widget being seamless, that trade was wrong.
+
+Layer 1 covers ~90% of real customer pages cleanly. The remaining
+~10% (video/canvas/iframe-heavy pages) get a placeholder for those
+specific regions, not a blank screenshot. Pixel-perfect capture of
+those regions can be re-introduced behind an explicit opt-in
+(browser extension, customer-controlled mount option) in the future
+— not as a permission-based escalation in the default flow.
+
+### Breaking changes (no consumers should be using these but they're gone)
+
+- `setCaptureSettings({ alwaysPixelPerfect, disableLayer2 })` —
+  module removed. Settings were per-host localStorage and only
+  controlled the layer-2 escalation.
+- `mountCaptureOnly({ defaultPixelPerfect })` — option removed.
+- `onDisplayMediaChange`, `retryDisplayMedia`, `stopDisplayMedia` —
+  exports removed.
+- `screenshot.source: "display-media"` — never emitted now. Type
+  union still allows it for v3/v4 receiver compat.
+- `captureDiagnostics.strategy` is now always `"layer1-only"` or
+  `"both-failed"`. The other variants in the type union remain for
+  schema compat.
+
+### Kept
+
+- `captureDiagnostics` (insitue#11) — still populated, single layer
+  entry. Aggregates of failure modes drive Phase 3 fixes.
+- `window.__insitueDebug__` crop overlay (insitue#12).
+- Manual-overlay fix for next/image (`renderViewportCrop`).
+- Schema v4 from capture-core 0.4.0.
+
 ## 0.4.17
 
 - **Capture telemetry (insitue#10 Phase 1).** Every bundle now ships

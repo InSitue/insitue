@@ -35,7 +35,6 @@ import {
   type SelectionInput,
 } from "@insitue/capture-core";
 import { runtimeSnapshot } from "./runtime.js";
-import { getCaptureSettings } from "./capture-settings.js";
 
 /** Is `url` a cross-origin resource that would taint a canvas?
  *  data:/blob: and same-origin are safe; anything else is a risk. */
@@ -120,17 +119,17 @@ async function renderViewportCrop(
 ): Promise<{
   dataUrl: string | null;
   /** True when the rasterised canvas's 16-pixel sample grid hit a
-   *  single colour. Caller decides: when layer-2 is available, treat
-   *  this as a failed rasterise and escalate; when layer-2 is off
-   *  (dev overlay), trust it (legitimate uniform-colour crops happen,
-   *  e.g. a small element inside a solid-background section, and a
-   *  uniform thumbnail beats no thumbnail). */
+   *  single colour. */
   looksBlank: boolean;
   /** 0..1 — fraction of the sample grid hitting the most-common
-   *  pixel. 1.0 = `looksBlank: true`. Threaded through to
-   *  `captureDiagnostics.shippedBlankScore` (insitue#10). */
+   *  pixel. 1.0 = `looksBlank: true`. */
   blankScore: number;
   failedImages: Set<HTMLImageElement>;
+  /** When set, the screenshot ISN'T an actual rasterise — it's the
+   *  labeled placeholder we paint when html-to-image throws (#10
+   *  / 0.5.0 — no silent failures). The string is the underlying
+   *  error, suitable for the bundle's qualityNote. */
+  placeholderReason?: string;
 }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
@@ -158,17 +157,123 @@ async function renderViewportCrop(
   //    absolutely-positioned <img>s (the next/image fill pattern)
   //    its foreignObject pipeline drops the image and shows the
   //    parent's background instead. We'll patch over that next.
-  const fullCanvas = await toCanvas(document.documentElement, {
-    pixelRatio,
-    cacheBust: true,
-    backgroundColor,
-    imagePlaceholder: IMAGE_PLACEHOLDER,
-    filter: (n) =>
-      !(
-        n instanceof Element &&
-        n.closest?.("#insitue-root, [data-insitue-layer]")
-      ),
-  });
+  //
+  //    `toCanvas` can throw for many reasons — most commonly an
+  //    `<img>` load failure inside the foreignObject pipeline
+  //    rejects with an Event (NOT an Error), which cascades up and
+  //    aborts the whole render. One unloadable image on the page
+  //    kills every capture. The widget's core flow CAN'T have that
+  //    failure mode (insitue#10 / 0.5.0).
+  //
+  //    Two-tier retry:
+  //    a) Full render with image embedding — happy path, best
+  //       fidelity.
+  //    b) If (a) throws: retry with all `<img>` and `<svg>` images
+  //       filtered out. Loses the bitmaps but keeps layout, colors,
+  //       backgrounds, text — far more useful than a placeholder.
+  //       The drawAbsoluteImagesOnto step below layers images back
+  //       in directly from the live page (CORS-friendly only).
+  //    c) If (b) also throws: paint a labeled placeholder so the
+  //       bundle still ships *something* (handled outside this fn).
+  // CRITICAL: `cacheBust: false`. html-to-image's cacheBust appends
+  // `?t=<timestamp>` to every image URL — which BREAKS `data:` URLs
+  // (they don't accept query params). One data-URL img on the page
+  // (including our own `IMAGE_PLACEHOLDER`) makes the whole render
+  // throw a `<img>.onerror` Event. Discovered in dogfood with the
+  // stress page's `data:image/svg+xml` hero img. We don't need
+  // cache busting in a one-shot capture anyway — the browser's
+  // HTTP cache is exactly what we want to read from.
+  let fullCanvas: HTMLCanvasElement | null = null;
+  let htiError: Error | null = null;
+  // Defensive filter — see `shouldSkipForHti` below for the
+  // enumerated reasons. ONE problematic element on the page
+  // (e.g. a `<video>` with no src AND no poster) kills the entire
+  // html-to-image render via internal `resourceToDataURL("")` →
+  // fetch(page) → `<img>.src = data:text/html;base64,<page HTML>` →
+  // load fails → entire toCanvas rejects. We filter those out
+  // upfront so the render always succeeds.
+  const filterForHtmlToImage = (n: Node): boolean => {
+    if (
+      n instanceof Element &&
+      n.closest?.("#insitue-root, [data-insitue-layer]")
+    ) {
+      return false;
+    }
+    return !shouldSkipForHti(n);
+  };
+  try {
+    fullCanvas = await toCanvas(document.body, {
+      pixelRatio,
+      cacheBust: false,
+      backgroundColor,
+      imagePlaceholder: IMAGE_PLACEHOLDER,
+      filter: filterForHtmlToImage,
+    });
+  } catch (e) {
+    htiError = describeHtmlToImageError(e);
+    // eslint-disable-next-line no-console
+    console.warn(
+      "[insitue] html-to-image full render failed, retrying without imgs:",
+      htiError.message,
+    );
+    // Mutate the live DOM: replace every <img>.src with a
+    // 1×1 transparent PNG before rendering, then restore after.
+    // html-to-image's filter doesn't reliably skip the embed step;
+    // the only sure way to avoid `<img>.onerror` is to make every
+    // src trivially loadable. drawAbsoluteImagesOnto layers the
+    // real bitmaps back in afterwards.
+    const TRANSPARENT_PNG =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const imgs = Array.from(document.querySelectorAll("img"));
+    const originals = imgs.map((i) => i.getAttribute("src"));
+    try {
+      for (const img of imgs) img.setAttribute("src", TRANSPARENT_PNG);
+      fullCanvas = await toCanvas(document.body, {
+        pixelRatio,
+        cacheBust: false,
+        backgroundColor,
+        imagePlaceholder: IMAGE_PLACEHOLDER,
+        filter: filterForHtmlToImage,
+      });
+      htiError = null;
+    } catch (e2) {
+      htiError = describeHtmlToImageError(e2);
+      // eslint-disable-next-line no-console
+      console.error(
+        "[insitue] html-to-image both attempts failed:",
+        htiError.message,
+      );
+    } finally {
+      // Always restore — never leave the page in a degraded state.
+      for (let i = 0; i < imgs.length; i++) {
+        const orig = originals[i];
+        if (orig == null) imgs[i]!.removeAttribute("src");
+        else imgs[i]!.setAttribute("src", orig);
+      }
+    }
+  }
+
+  if (!fullCanvas) {
+    // html-to-image gave up. Paint a labeled placeholder onto the
+    // out canvas so the bundle ships a screenshot (even if
+    // honestly degraded) rather than nothing. The qualityNote on
+    // the bundle tells the reviewer why.
+    const reason = htiError?.message ?? "rasterise failed (no error message)";
+    paintCapturePlaceholder(
+      ctx,
+      out.width,
+      out.height,
+      backgroundColor,
+      reason,
+    );
+    return {
+      dataUrl: out.toDataURL("image/png"),
+      looksBlank: false,
+      blankScore: 0,
+      failedImages,
+      placeholderReason: reason,
+    };
+  }
 
   // 2. Composite html-to-image output onto our crop canvas.
   const sx = window.scrollX;
@@ -430,6 +535,109 @@ function computeObjectFitSource(
  *  the layer-2 `getDisplayMedia` escalation — so the user gets a
  *  pixel-perfect capture (with permission) instead of a silent
  *  empty image. */
+/** Enumerated elements that, if left in the DOM, will reliably break
+ *  html-to-image's render with no useful error message. We filter
+ *  these out upfront so the screenshot ALWAYS lands.
+ *
+ *  Confirmed cases:
+ *
+ *  - **`<video>` with no `src` AND no `poster`** — `cloneVideoElement`
+ *    falls through to `resourceToDataURL("", "", options)`, which does
+ *    `fetch("")` which resolves to the current page URL. The browser
+ *    returns the page HTML with `content-type: text/html`. html-to-
+ *    image base64-encodes it as `data:text/html;base64,<page HTML>` and
+ *    assigns to its internal `<img>.src`. The img can't load HTML →
+ *    rejects with an onerror Event → entire toCanvas throws.
+ *    Confirmed in dogfood with the stress page; reproducible in
+ *    isolation with `<video></video>` on any page.
+ *
+ *  Add more entries here as we find them — each one with a comment
+ *  explaining the failure mode. Better to filter known-broken
+ *  elements out than ship a generic try/catch that hides bugs. */
+function shouldSkipForHti(n: Node): boolean {
+  if (n instanceof HTMLVideoElement) {
+    const hasSrc = !!(n.currentSrc || n.src);
+    const hasPoster = !!n.poster;
+    if (!hasSrc && !hasPoster) return true;
+  }
+  return false;
+}
+
+/** Stringify whatever html-to-image (and its foreignObject pipeline)
+ *  rejected with. The most common failure is an `<img>.onerror` event
+ *  bubbling up — that's an `Event` object, not an Error. Default
+ *  string-coercion gives the useless `[object Event]`. Pull out the
+ *  target's tag + src so the qualityNote is actually actionable.
+ *  (insitue#10 — dogfood found `screenshot couldn't be rendered:
+ *  [object Event]` shipped in real captures.) */
+function describeHtmlToImageError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  if (typeof Event !== "undefined" && e instanceof Event) {
+    const t = e.target as
+      | (HTMLElement & { src?: string; href?: string })
+      | null;
+    const tag = t?.tagName?.toLowerCase();
+    const src =
+      (t && "src" in t && t.src) ||
+      (t && "href" in t && (t as unknown as { href?: string }).href) ||
+      "";
+    const where = tag
+      ? src
+        ? `<${tag}> failed to load (${truncate(src, 120)})`
+        : `<${tag}> emitted ${e.type}`
+      : `resource emitted ${e.type}`;
+    return new Error(where);
+  }
+  // Some libs reject with a string or arbitrary object.
+  if (typeof e === "string") return new Error(e);
+  if (e && typeof e === "object" && "message" in e) {
+    return new Error(String((e as { message: unknown }).message));
+  }
+  return new Error(`unknown rejection: ${Object.prototype.toString.call(e)}`);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+/** Paint a labeled placeholder when the html-to-image render fails
+ *  entirely. The bundle still ships a screenshot — a clearly-labeled
+ *  one — instead of nothing. Honest degradation: better a "we
+ *  couldn't render this" thumbnail than the widget feeling broken.
+ *  (insitue#10 / 0.5.0 — no silent failures in the core flow.) */
+function paintCapturePlaceholder(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bg: string,
+  reason: string,
+): void {
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+  // Diagonal hatch so it doesn't look like a real screenshot.
+  ctx.strokeStyle = "rgba(120,120,140,0.18)";
+  ctx.lineWidth = Math.max(1, Math.round(w / 280));
+  const step = Math.max(16, Math.round(w / 28));
+  for (let x = -h; x < w + h; x += step) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + h, h);
+    ctx.stroke();
+  }
+  // Label box.
+  const fontPx = Math.max(11, Math.round(w / 32));
+  ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "center";
+  const title = "Screenshot couldn't be rendered";
+  const sub = reason.length > 90 ? reason.slice(0, 87) + "…" : reason;
+  ctx.fillText(title, w / 2, h / 2 - fontPx * 0.7);
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.font = `400 ${Math.max(10, Math.round(fontPx * 0.78))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+  ctx.fillText(sub, w / 2, h / 2 + fontPx * 0.55);
+}
+
 function detectUnrenderedImages(
   cropCtx: CanvasRenderingContext2D,
   cropRect: DOMRect,
@@ -682,287 +890,6 @@ function describeImperfection(q: QualityAssessment): string {
   return parts.join(" + ");
 }
 
-// ---------------------------------------------------------------
-// Layer 2 — `getDisplayMedia` pixel-perfect capture.
-
-/** Session-scoped cache for the active tab-capture MediaStream. The
- *  stream pays a one-time browser permission prompt; subsequent
- *  captures in the same session reuse it instantly. */
-const displayMediaState: {
-  stream: MediaStream | null;
-  trackEndedHandler: (() => void) | null;
-  idleTimer: ReturnType<typeof setTimeout> | null;
-  deniedAt: number | null;
-} = {
-  stream: null,
-  trackEndedHandler: null,
-  idleTimer: null,
-  deniedAt: null,
-};
-
-const IDLE_MS = 90_000;
-
-/** Listeners that want to react when the tab-capture stream is
- *  granted, ended, or denied — used by the overlay to flip the
- *  "tab capture active" pill on/off. */
-type DisplayMediaListener = (active: boolean, reason?: string) => void;
-const displayMediaListeners = new Set<DisplayMediaListener>();
-export function onDisplayMediaChange(l: DisplayMediaListener): () => void {
-  displayMediaListeners.add(l);
-  // Initial sync.
-  l(displayMediaState.stream != null);
-  return () => displayMediaListeners.delete(l);
-}
-function notifyDisplayMedia(reason?: string): void {
-  const active = displayMediaState.stream != null;
-  for (const l of displayMediaListeners) l(active, reason);
-}
-
-/** Stop the cached stream and clear all hooks. Called on overlay
- *  close, page hide, idle expiry, or explicit user stop. */
-export function stopDisplayMedia(reason = "stopped"): void {
-  if (displayMediaState.stream) {
-    for (const t of displayMediaState.stream.getTracks()) t.stop();
-  }
-  if (displayMediaState.idleTimer) clearTimeout(displayMediaState.idleTimer);
-  if (
-    displayMediaState.trackEndedHandler &&
-    displayMediaState.stream
-  ) {
-    for (const t of displayMediaState.stream.getTracks()) {
-      t.removeEventListener("ended", displayMediaState.trackEndedHandler);
-    }
-  }
-  displayMediaState.stream = null;
-  displayMediaState.trackEndedHandler = null;
-  displayMediaState.idleTimer = null;
-  notifyDisplayMedia(reason);
-}
-
-function bumpIdleTimer(): void {
-  if (displayMediaState.idleTimer) clearTimeout(displayMediaState.idleTimer);
-  displayMediaState.idleTimer = setTimeout(
-    () => stopDisplayMedia("idle"),
-    IDLE_MS,
-  );
-}
-
-/** True when the browser supports the tab-capture API. */
-function supportsDisplayMedia(): boolean {
-  return (
-    typeof navigator !== "undefined" &&
-    typeof navigator.mediaDevices?.getDisplayMedia === "function"
-  );
-}
-
-/** Resolve (or create) the session-scoped `getDisplayMedia`
- *  MediaStream. Returns null if unsupported, denied, or already
- *  denied this session (debounced — we don't re-prompt the same
- *  session if the user said no). */
-async function ensureDisplayMediaStream(): Promise<MediaStream | null> {
-  if (!supportsDisplayMedia()) return null;
-  if (displayMediaState.stream) {
-    bumpIdleTimer();
-    return displayMediaState.stream;
-  }
-  // Debounce repeated prompts after a deny — re-prompting on every
-  // capture would be hostile UX. The overlay's explicit "Enable"
-  // nudge clears this flag.
-  if (displayMediaState.deniedAt && Date.now() - displayMediaState.deniedAt < 60_000) {
-    return null;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      // `displaySurface: 'browser'` + `preferCurrentTab: true` makes
-      // Chrome/Edge default-select the current tab in the prompt.
-      // Other browsers ignore the hints; user still picks manually.
-      video: {
-        // displaySurface is in the spec but the lib.dom MediaTrackConstraints
-        // type doesn't expose it yet — cast keeps us strict without lying.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        displaySurface: "browser",
-      } as MediaTrackConstraints,
-      audio: false,
-      // preferCurrentTab is Chromium-only and not in the standard
-      // DisplayMediaStreamOptions; same lib.dom-typing gap.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      preferCurrentTab: true,
-    } as DisplayMediaStreamOptions);
-    displayMediaState.stream = stream;
-    displayMediaState.deniedAt = null;
-    // If the user clicks the browser's native "Stop sharing" button,
-    // tracks end on their own — sync our state.
-    const handler = () => stopDisplayMedia("track-ended");
-    for (const t of stream.getTracks()) t.addEventListener("ended", handler);
-    displayMediaState.trackEndedHandler = handler;
-    bumpIdleTimer();
-    notifyDisplayMedia("granted");
-    return stream;
-  } catch {
-    displayMediaState.deniedAt = Date.now();
-    notifyDisplayMedia("denied");
-    return null;
-  }
-}
-
-/** User-initiated retry — clears the deny-debounce and re-prompts. */
-export async function retryDisplayMedia(): Promise<boolean> {
-  displayMediaState.deniedAt = null;
-  const s = await ensureDisplayMediaStream();
-  return s != null;
-}
-
-/** Hide our overlay layers for the single frame we capture so the
- *  panel and picker UI don't appear in the screenshot. Restores on
- *  the next animation frame so the user barely sees the flicker. */
-function hideOverlayLayersBriefly(): () => void {
-  const id = "insitue-capture-hide";
-  // Hide via attribute selector so we don't fight specific
-  // implementations of the overlay layer.
-  const style = document.createElement("style");
-  style.id = id;
-  style.textContent = `
-    #insitue-root, [data-insitue-layer] { visibility: hidden !important; }
-  `;
-  document.head.appendChild(style);
-  return () => {
-    style.remove();
-  };
-}
-
-interface DisplayMediaGrab {
-  dataUrl: string;
-  /** True if the stream was just granted in this call (vs cached). */
-  fresh: boolean;
-  /** Post-capture blank verdict — `getDisplayMedia` can return all-
-   *  black under certain browser/OS conditions (Chrome on macOS
-   *  Sonoma had a known case). Threaded through so the layer-2
-   *  attempt outcome can be `"blank"` instead of false-positive
-   *  `"success"`. */
-  looksBlank: boolean;
-  blankScore: number;
-}
-
-/** Grab a single frame from the tab-capture stream and crop to
- *  `cropRect`. Returns null if no stream, frame grab fails, or the
- *  user declines the permission. */
-async function tryGrabViaDisplayMedia(
-  cropRect: DOMRect,
-  pixelRatio: number,
-): Promise<DisplayMediaGrab | null> {
-  const wasActive = displayMediaState.stream != null;
-  const stream = await ensureDisplayMediaStream();
-  if (!stream) return null;
-  const fresh = !wasActive;
-  bumpIdleTimer();
-
-  // Hide our overlay so it doesn't appear in the captured frame.
-  const restoreOverlay = hideOverlayLayersBriefly();
-  // Yield one paint so the visibility change takes effect before
-  // the frame grab fires. Two rAFs is paranoid but stable across
-  // browsers.
-  await new Promise<void>((r) =>
-    requestAnimationFrame(() => requestAnimationFrame(() => r())),
-  );
-
-  try {
-    const track = stream.getVideoTracks()[0];
-    if (!track) return null;
-    let bitmap: ImageBitmap | null = null;
-    // ImageCapture is the cleanest path; fall back to a hidden
-    // <video> + drawImage where the API isn't exposed (Safari, older
-    // Firefox). ImageCapture isn't in lib.dom — feature-detect it.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const Ctor = (window as any).ImageCapture as
-      | (new (track: MediaStreamTrack) => {
-          grabFrame: () => Promise<ImageBitmap>;
-        })
-      | undefined;
-    if (Ctor) {
-      bitmap = await new Ctor(track).grabFrame();
-    } else {
-      bitmap = await grabFrameViaVideo(stream);
-    }
-    if (!bitmap) return null;
-
-    // Stream resolution can differ from logical viewport pixels on
-    // HiDPI displays. Convert viewport-coord `cropRect` to stream-
-    // pixel coords using the actual frame size.
-    const frameW = bitmap.width;
-    const frameH = bitmap.height;
-    const scaleX = frameW / window.innerWidth;
-    const scaleY = frameH / window.innerHeight;
-    const sx = Math.max(0, Math.round(cropRect.x * scaleX));
-    const sy = Math.max(0, Math.round(cropRect.y * scaleY));
-    const sw = Math.min(frameW - sx, Math.round(cropRect.width * scaleX));
-    const sh = Math.min(frameH - sy, Math.round(cropRect.height * scaleY));
-
-    const out = document.createElement("canvas");
-    out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
-    out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
-    const ctx = out.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, out.width, out.height);
-    bitmap.close?.();
-    const { looksBlank, blankScore } = looksBlankUniform(
-      ctx,
-      out.width,
-      out.height,
-    );
-    return {
-      dataUrl: out.toDataURL("image/png"),
-      fresh,
-      looksBlank,
-      blankScore,
-    };
-  } finally {
-    restoreOverlay();
-  }
-}
-
-/** Fallback frame grab via a hidden `<video>` + `drawImage` for
- *  browsers without the `ImageCapture` API. */
-async function grabFrameViaVideo(stream: MediaStream): Promise<ImageBitmap> {
-  const video = document.createElement("video");
-  video.srcObject = stream;
-  video.muted = true;
-  video.playsInline = true;
-  video.style.position = "fixed";
-  video.style.pointerEvents = "none";
-  video.style.opacity = "0";
-  video.style.width = "1px";
-  video.style.height = "1px";
-  document.body.appendChild(video);
-  try {
-    await video.play().catch(() => undefined);
-    // Wait for a non-zero size before grabbing.
-    await new Promise<void>((resolve, reject) => {
-      const onReady = () => {
-        video.removeEventListener("loadeddata", onReady);
-        resolve();
-      };
-      video.addEventListener("loadeddata", onReady, { once: true });
-      setTimeout(() => reject(new Error("video timeout")), 2_000);
-    });
-    const tmp = document.createElement("canvas");
-    tmp.width = video.videoWidth;
-    tmp.height = video.videoHeight;
-    const ctx = tmp.getContext("2d");
-    if (!ctx) throw new Error("no 2d ctx");
-    ctx.drawImage(video, 0, 0);
-    return await createImageBitmap(tmp);
-  } finally {
-    video.remove();
-  }
-}
-
-// ---------------------------------------------------------------
-// Lifecycle hooks — auto-stop the stream when the user leaves.
-
-if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", () => stopDisplayMedia("pagehide"));
-}
-
 function elementFor(sel: SelectionInput): Element | null {
   if (sel.mode === "element") return sel.pointerPath?.[0] ?? null;
   if (sel.rect) {
@@ -979,7 +906,6 @@ export async function buildBundle(
   const el = elementFor(sel);
   const rt = runtimeSnapshot();
   const dpr = window.devicePixelRatio || 1;
-  const settings = getCaptureSettings();
 
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
@@ -1053,118 +979,53 @@ export async function buildBundle(
     let failedImagesCount = 0;
 
     try {
-      // 3. Decide which path to try first.
-      //    - alwaysPixelPerfect setting → skip layer 1, go straight
-      //      to display-media (if a stream is already active or the
-      //      user explicitly opted in).
-      //    - otherwise → layer 1 → assess → layer 2 if imperfect.
-      const skipLayer1 = settings.alwaysPixelPerfect;
-
-      let layer1Result: string | null = null;
-      let layer1LooksBlank = false;
-      let layer1BlankScore = 0;
-      let quality: QualityAssessment | null = null;
-
-      if (!skipLayer1) {
-        const t0 = performance.now();
-        try {
-          const r = await renderViewportCrop(cropRect, pixelRatioUsed);
-          const dur = performance.now() - t0;
-          layer1Result = r.dataUrl;
-          layer1LooksBlank = r.looksBlank;
-          layer1BlankScore = r.blankScore;
-          failedImagesCount = r.failedImages.size;
-          quality = assessCaptureQuality(cropRect, r.failedImages);
-          attempts.push({
-            layer: 1,
-            outcome: !r.dataUrl
-              ? "error"
-              : r.looksBlank
-                ? "blank"
-                : "success",
-            durationMs: Math.round(dur),
-            ...(!r.dataUrl ? { error: "renderViewportCrop returned null" } : {}),
-          });
-        } catch (e) {
-          attempts.push({
-            layer: 1,
-            outcome: "error",
-            durationMs: Math.round(performance.now() - t0),
-            error: (e as Error).message,
-          });
-        }
-      } else {
-        attempts.push({ layer: 1, outcome: "skipped", durationMs: 0 });
-      }
-
-      const imperfect =
-        !layer1Result ||
-        layer1LooksBlank ||
-        (quality != null &&
-          (quality.unembeddableImages > 0 ||
-            quality.hasVideo ||
-            quality.hasCanvas));
-
-      // `disableLayer2` — dev overlay sets this on mount. Layer-2
-      // requires a tab-share permission prompt mid-flow, which is
-      // hostile for the local agent loop. The SaaS widget keeps
-      // layer-2 enabled (end-user bug reports need perfect pixels).
-      const allowLayer2 = !settings.disableLayer2;
-
-      if ((imperfect || skipLayer1) && allowLayer2) {
-        // 4. Layer 2 — try `getDisplayMedia` for a pixel-perfect grab.
-        const t0 = performance.now();
-        let grab: DisplayMediaGrab | null = null;
-        try {
-          grab = await tryGrabViaDisplayMedia(cropRect, Math.min(dpr, 2));
-          const dur = performance.now() - t0;
-          attempts.push({
-            layer: 2,
-            outcome: !grab
-              ? "error"
-              : grab.looksBlank
-                ? "blank"
-                : "success",
-            durationMs: Math.round(dur),
-            ...(!grab ? { error: "getDisplayMedia returned null" } : {}),
-          });
-        } catch (e) {
-          attempts.push({
-            layer: 2,
-            outcome: "error",
-            durationMs: Math.round(performance.now() - t0),
-            error: (e as Error).message,
-          });
-        }
-        if (grab && !grab.looksBlank) {
+      // Single capture path: html-to-image rasterise of the full
+      // document, cropped to the picked element's surroundings.
+      // No permission prompts, no fallback chains, no escalation.
+      // When html-to-image can't faithfully capture a region
+      // (video frames, canvas pixels, cross-origin iframe content,
+      // non-CORS images) the manual-overlay path inside
+      // renderViewportCrop paints an explicit placeholder so the
+      // user always sees SOMETHING shaped like their selection —
+      // never a silent blank.
+      const t0 = performance.now();
+      try {
+        const r = await renderViewportCrop(cropRect, pixelRatioUsed);
+        const dur = performance.now() - t0;
+        failedImagesCount = r.failedImages.size;
+        const quality = assessCaptureQuality(cropRect, r.failedImages);
+        attempts.push({
+          layer: 1,
+          outcome: !r.dataUrl
+            ? "error"
+            : r.looksBlank
+              ? "blank"
+              : "success",
+          durationMs: Math.round(dur),
+          ...(!r.dataUrl ? { error: "renderViewportCrop returned null" } : {}),
+        });
+        if (r.dataUrl) {
+          // Even when looksBlank=true (a uniform-color sample grid)
+          // we still ship: small picks of solid-color surfaces are
+          // legitimately uniform, and the qualityNote tells the
+          // reviewer what we saw.
+          //
+          // `placeholderReason` (set when html-to-image threw and
+          // we painted the labeled placeholder) takes priority — it
+          // tells the reviewer the screenshot is structurally a
+          // placeholder, not a real capture.
+          const qualityNote = r.placeholderReason
+            ? `screenshot couldn't be rendered: ${r.placeholderReason}`
+            : r.looksBlank
+              ? "captured image looks uniform — small picks against solid backgrounds can read as blank, or the embed step may have dropped an element"
+              : quality.unembeddableImages > 0 ||
+                  quality.hasVideo ||
+                  quality.hasCanvas
+                ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
+                : undefined;
           screenshot = {
             mime: "image/png",
-            dataUrl: grab.dataUrl,
-            bounds: {
-              x: cropRect.x,
-              y: cropRect.y,
-              width: cropRect.width,
-              height: cropRect.height,
-            },
-            source: "display-media",
-          };
-          shippedBlankScore = grab.blankScore;
-          shippedLooksBlank = false;
-        } else if (layer1Result) {
-          // 5. Layer 3 — graceful degrade. Ship layer-1 result with
-          // an honest qualityNote so the dashboard can surface it.
-          // If layer-1 also looks blank, escalate the note rather
-          // than silently shipping a blank thumbnail (insitue#10 fix).
-          const reason = quality
-            ? describeImperfection(quality)
-            : "non-CORS content";
-          const baseNote = `${reason} couldn't be embedded — grant tab capture for pixel-perfect screenshots`;
-          const blankNote = layer1LooksBlank
-            ? "captured image looks blank — likely an embed failure; grant tab capture for pixel-perfect screenshots"
-            : null;
-          screenshot = {
-            mime: "image/png",
-            dataUrl: layer1Result,
+            dataUrl: r.dataUrl,
             bounds: {
               x: cropRect.x,
               y: cropRect.y,
@@ -1172,59 +1033,23 @@ export async function buildBundle(
               height: cropRect.height,
             },
             source: "rasterise",
-            qualityNote: blankNote ?? baseNote,
+            ...(qualityNote ? { qualityNote } : {}),
           };
-          shippedBlankScore = layer1BlankScore;
-          shippedLooksBlank = layer1LooksBlank;
-        } else if (skipLayer1) {
-          // Rasterise was deliberately skipped (alwaysPixelPerfect),
-          // so the only failure mode here is the user declining the
-          // tab-share prompt (or the browser not supporting it).
-          // Reporting "rasterise failed" would be technically false
-          // and reads as "the SDK is broken" — see #61.
-          screenshotUnavailable = supportsDisplayMedia()
-            ? "tab capture was declined — grant it for pixel-perfect screenshots, or turn off “Always pixel-perfect” in the gear to fall back to the rasterise path"
-            : "tab capture unsupported in this browser — turn off “Always pixel-perfect” in the gear to fall back to the rasterise path";
+          shippedBlankScore = r.blankScore;
+          shippedLooksBlank = r.looksBlank;
         } else {
-          // Layer 1 was attempted and produced nothing usable; layer 2
-          // also declined or unsupported. Honest "both paths failed".
-          screenshotUnavailable = supportsDisplayMedia()
-            ? "rasterise failed — grant tab capture for pixel-perfect screenshots"
-            : "rasterise failed and tab capture unsupported in this browser";
+          screenshotUnavailable =
+            "rasterise produced no output — the picked region may be empty or the renderer failed";
         }
-      } else if (layer1Result) {
-        // Layer 1 was clean — ship it, no escalation needed.
-        // BUT if it looksBlank, surface that even when layer-2 is
-        // disabled (dev/companion path). Better an honest qualityNote
-        // than a silent blank thumbnail (insitue#10 fix).
-        screenshot = {
-          mime: "image/png",
-          dataUrl: layer1Result,
-          bounds: {
-            x: cropRect.x,
-            y: cropRect.y,
-            width: cropRect.width,
-            height: cropRect.height,
-          },
-          source: "rasterise",
-          ...(layer1LooksBlank
-            ? {
-                qualityNote:
-                  "captured image looks blank — embed step may have dropped the picked element; enable pixel-perfect in the gear to retry with tab capture",
-              }
-            : {}),
-        };
-        shippedBlankScore = layer1BlankScore;
-        shippedLooksBlank = layer1LooksBlank;
-      } else {
-        screenshotUnavailable = "rasterise produced an empty image";
-      }
-
-      // Mark layers that were never considered as `skipped`. After
-      // the dispatch above, exactly one of {1, 2} may still be
-      // missing from `attempts`.
-      if (!attempts.some((a) => a.layer === 2)) {
-        attempts.push({ layer: 2, outcome: "skipped", durationMs: 0 });
+      } catch (e) {
+        attempts.push({
+          layer: 1,
+          outcome: "error",
+          durationMs: Math.round(performance.now() - t0),
+          error: (e as Error).message,
+        });
+        screenshotUnavailable =
+          e instanceof Error ? `rasterise failed: ${e.message}` : "rasterise failed";
       }
     } catch (err) {
       // Last-ditch — if something completely unexpected happened,
@@ -1240,37 +1065,15 @@ export async function buildBundle(
     }
 
     // Build the diagnostics record — runs whether the screenshot
-    // landed or not. Strategy field is derived from which attempts
-    // were recorded as success/blank (insitue#10).
-    const succeeded = attempts.filter((a) => a.outcome === "success");
-    const blanked = attempts.filter((a) => a.outcome === "blank");
-    let strategy: import("@insitue/capture-core").CaptureDiagnostics["strategy"];
+    // landed or not. After the layer-2 removal, strategy is always
+    // `layer1-only` (success branch) or `both-failed` (when the
+    // single attempt errored / returned nothing). Kept as a field
+    // so existing receivers stay backwards-compatible.
     const l1 = attempts.find((a) => a.layer === 1);
-    const l2 = attempts.find((a) => a.layer === 2);
-    if (
-      l1 &&
-      ["success", "blank"].includes(l1.outcome) &&
-      l2?.outcome === "skipped"
-    ) {
-      strategy = "layer1-only";
-    } else if (
-      l2 &&
-      ["success", "blank"].includes(l2.outcome) &&
-      l1?.outcome === "skipped"
-    ) {
-      strategy = "layer2-only";
-    } else if (succeeded.some((a) => a.layer === 2)) {
-      strategy = "layer1-then-layer2";
-    } else if (
-      blanked.some((a) => a.layer === 2) &&
-      succeeded.some((a) => a.layer === 1)
-    ) {
-      strategy = "layer1-degraded";
-    } else if (succeeded.length === 0) {
-      strategy = "both-failed";
-    } else {
-      strategy = "layer1-only";
-    }
+    const strategy: import("@insitue/capture-core").CaptureDiagnostics["strategy"] =
+      l1 && (l1.outcome === "success" || l1.outcome === "blank")
+        ? "layer1-only"
+        : "both-failed";
     captureDiagnostics = {
       strategy,
       attemptedLayers: attempts,

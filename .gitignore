@@ -22,6 +22,7 @@ packages/swc-source-attr/insitue_swc_source_attr.wasm
 .playwright-mcp/
 coverage/
 *.lcov
+packages/sdk/test/__screenshots__/
 
 # Claude Code tooling (local per-user symlinks + lockfiles + state).
 .agents/
