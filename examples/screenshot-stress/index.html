@@ -1,0 +1,482 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>InSitue · screenshot-reliability stress page</title>
+    <style>
+      /* Bright variety — solid backgrounds and crisp shapes — so a
+         "blank" screenshot is unmistakable in the captured thumbnail. */
+      :root { color-scheme: light; }
+      body {
+        margin: 0;
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+        background: #f7f7fb;
+        color: #0a0a0a;
+        padding: 24px 32px 96px;
+      }
+      header {
+        max-width: 1100px;
+        margin: 0 auto 28px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+      }
+      header h1 {
+        margin: 0;
+        font-size: 22px;
+        letter-spacing: -0.02em;
+      }
+      header .meta {
+        font-size: 12px;
+        color: #5a5a6a;
+      }
+      header a {
+        color: #7c3aed;
+      }
+      .grid {
+        max-width: 1100px;
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 24px;
+      }
+      .case {
+        background: #ffffff;
+        border: 1px solid #e6e6ec;
+        border-radius: 14px;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .case header {
+        display: block;
+        margin: 0;
+      }
+      .case h2 {
+        margin: 0 0 4px 0;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
+      .case .tag {
+        display: inline-block;
+        font: 600 10px/1 ui-monospace, monospace;
+        background: #f0eaff;
+        color: #5b21b6;
+        padding: 4px 7px;
+        border-radius: 999px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .case .why {
+        font-size: 12px;
+        color: #5a5a6a;
+        margin: 0;
+      }
+      .target {
+        /* All testable elements live inside `.target` — this is what
+           you pick with the InSitue dot. Keep it tall enough that the
+           crop-to-context logic produces a meaningful thumbnail. */
+        background: linear-gradient(135deg, #6366f1, #ec4899);
+        border-radius: 10px;
+        min-height: 160px;
+        position: relative;
+        overflow: hidden;
+      }
+      .legend {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        background: #0a0a0a;
+        color: #fff;
+        font: 600 11px/1 ui-monospace, monospace;
+        padding: 10px 12px;
+        border-radius: 8px;
+        z-index: 999;
+        opacity: 0.85;
+        max-width: 240px;
+        line-height: 1.5;
+      }
+      .legend a { color: #a78bfa; }
+
+      /* ── per-case styling ─────────────────────────────────────── */
+
+      /* CASE 1 — next/image fill-pattern repro */
+      .case-next-image .target { aspect-ratio: 16 / 9; min-height: 0; }
+      .case-next-image .nx-img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .case-next-image .overlay {
+        position: absolute;
+        inset: 0;
+        padding: 24px;
+        color: #fff;
+        font: 800 22px/1.1 sans-serif;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+      }
+
+      /* CASE 4 — CSS background-image (not <img>) */
+      .case-bg-image .target {
+        background-image:
+          url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='600' height='200' viewBox='0 0 600 200'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='%2300d4ff'/><stop offset='1' stop-color='%23ffaa00'/></linearGradient></defs><rect width='600' height='200' fill='url(%23g)'/><text x='300' y='110' font-size='52' fill='white' text-anchor='middle' font-family='sans-serif'>BG-IMG</text></svg>");
+        background-size: cover;
+      }
+
+      /* CASE 7 — animation mid-paint */
+      @keyframes pulse-bg {
+        0%, 100% { background: #6366f1; }
+        50% { background: #ec4899; }
+      }
+      .case-motion .target {
+        animation: pulse-bg 2.4s ease-in-out infinite;
+        background: #6366f1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 32px/1 sans-serif;
+        color: #fff;
+      }
+
+      /* CASE 10 — sticky partially out of viewport. Pad above so
+         scrolling positions the target half-off-screen at the time
+         of capture. */
+      .case-sticky {
+        grid-column: 1 / -1;
+      }
+      .case-sticky .target {
+        position: sticky;
+        top: 8px;
+        background: #14b8a6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 28px/1 sans-serif;
+        color: #fff;
+        min-height: 120px;
+      }
+      .case-sticky .filler {
+        height: 600px;
+        background: repeating-linear-gradient(
+          45deg, #fff7ed 0 16px, #ffedd5 16px 32px
+        );
+        border-radius: 8px;
+      }
+
+      /* CASE 11 — transform parent */
+      .case-transform .target {
+        transform: scale(0.92) rotate(-1.5deg);
+        transform-origin: top left;
+        background: #f97316;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 28px/1 sans-serif;
+        color: #fff;
+      }
+
+      /* CASE 5/6/9 etc inherit base .target gradient. */
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>InSitue · screenshot-reliability stress page</h1>
+        <div class="meta">
+          Deterministic test battery for insitue#10. Pick each
+          <code>.target</code> with the InSitue dot and record what
+          ends up in <code>bundle.captureDiagnostics</code>.
+          Flip <code>window.__insitueDebug__ = true</code> in the
+          console to see the actual crop rect after each capture.
+        </div>
+      </div>
+      <div class="meta">
+        SDK: <code id="sdk-version">loading…</code>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- ─── CASE 1 — next/image fill pattern ───────────────────── -->
+      <section class="case case-next-image">
+        <header>
+          <div class="tag">case 1</div>
+          <h2>&lt;img&gt; with position:absolute + aspect-ratio parent</h2>
+          <p class="why">
+            The next/image-fill pattern. html-to-image's foreignObject
+            pipeline historically drops the img and shows the parent's
+            background instead — the manual-overlay fix in
+            <code>renderViewportCrop</code> is supposed to patch it.
+            If this captures blank, the overlay isn't firing.
+          </p>
+        </header>
+        <div class="target">
+          <img
+            class="nx-img"
+            alt="vivid hero"
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNDAwIiB2aWV3Qm94PSIwIDAgODAwIDQwMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZmY1MjgyIi8+PHN0b3Agb2Zmc2V0PSIwLjUiIHN0b3AtY29sb3I9IiNmZmJiMzMiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM1MmM0ZmYiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjQwMCIgZmlsbD0idXJsKCNnKSIvPjx0ZXh0IHg9IjQwMCIgeT0iMjI1IiBmb250LXNpemU9IjcyIiBmaWxsPSJ3aGl0ZSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9InNhbnMtc2VyaWYiPkhFUk88L3RleHQ+PC9zdmc+"
+          />
+          <div class="overlay">Hero text overlay</div>
+        </div>
+      </section>
+
+      <!-- ─── CASE 2 — same-origin <img> baseline ────────────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 2</div>
+          <h2>Same-origin &lt;img&gt; (the happy path)</h2>
+          <p class="why">
+            Baseline — html-to-image embeds same-origin images
+            cleanly. If this fails, something fundamental is broken.
+          </p>
+        </header>
+        <div class="target">
+          <img
+            alt="same-origin"
+            style="width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 10px"
+            src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MDAiIGhlaWdodD0iMzAwIiB2aWV3Qm94PSIwIDAgNjAwIDMwMCI+PHJlY3Qgd2lkdGg9IjYwMCIgaGVpZ2h0PSIzMDAiIGZpbGw9IiM2NWE1MGQiLz48dGV4dCB4PSIzMDAiIHk9IjE3MCIgZm9udC1zaXplPSI3MiIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJzYW5zLXNlcmlmIj5PSzwvdGV4dD48L3N2Zz4="
+          />
+        </div>
+      </section>
+
+      <!-- ─── CASE 3 — CORS-friendly cross-origin <img> ──────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 3</div>
+          <h2>CORS-friendly cross-origin &lt;img&gt;</h2>
+          <p class="why">
+            Picsum sends <code>access-control-allow-origin: *</code>.
+            html-to-image's <code>fetch</code>+embed should resolve
+            it. If this is blank, the embed step is failing.
+          </p>
+        </header>
+        <div class="target">
+          <img
+            alt="cors-friendly"
+            crossorigin="anonymous"
+            style="width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 10px"
+            src="https://picsum.photos/seed/insitue-cors-ok/600/300"
+          />
+        </div>
+      </section>
+
+      <!-- ─── CASE 4 — CSS background-image ──────────────────────── -->
+      <section class="case case-bg-image">
+        <header>
+          <div class="tag">case 4</div>
+          <h2>CSS background-image (not &lt;img&gt;)</h2>
+          <p class="why">
+            html-to-image's <code>embedImages</code> only handles
+            <code>&lt;img&gt;</code>. Background images need
+            inline-style serialization with data-URLs; common silent
+            blank-fail mode on CMS-hosted backgrounds.
+          </p>
+        </header>
+        <div class="target"></div>
+      </section>
+
+      <!-- ─── CASE 5 — <video> element ───────────────────────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 5</div>
+          <h2>&lt;video&gt; element</h2>
+          <p class="why">
+            Same-origin video — html-to-image can't extract its
+            current frame. Should trigger the
+            <code>hasVideo</code> tripwire in
+            <code>assessCaptureQuality</code> → layer-2 escalation.
+          </p>
+        </header>
+        <div class="target">
+          <!-- 1-second blue MP4 (silent, no controls) inlined as
+               data URL so the page is offline-safe. -->
+          <video
+            autoplay
+            muted
+            loop
+            playsinline
+            style="width: 100%; height: 100%; object-fit: cover; display: block; background: #1e3a8a; border-radius: 10px"
+          ></video>
+        </div>
+      </section>
+
+      <!-- ─── CASE 6 — <canvas> element ──────────────────────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 6</div>
+          <h2>&lt;canvas&gt; with live drawing</h2>
+          <p class="why">
+            Browser security may block readback. Should trip the
+            <code>hasCanvas</code> tripwire.
+          </p>
+        </header>
+        <div class="target">
+          <canvas
+            id="case-canvas"
+            width="600"
+            height="200"
+            style="width: 100%; height: 100%; display: block; border-radius: 10px"
+          ></canvas>
+        </div>
+      </section>
+
+      <!-- ─── CASE 7 — animated background ───────────────────────── -->
+      <section class="case case-motion">
+        <header>
+          <div class="tag">case 7</div>
+          <h2>Animated background (CSS keyframes)</h2>
+          <p class="why">
+            Captured mid-paint. The blank-detection heuristic should
+            recognize uniform color and escalate. Repeat picks to
+            see if the captured color drifts.
+          </p>
+        </header>
+        <div class="target">PULSING</div>
+      </section>
+
+      <!-- ─── CASE 8 — Shadow DOM ────────────────────────────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 8</div>
+          <h2>Element inside Shadow DOM (open)</h2>
+          <p class="why">
+            html-to-image walks the document tree but not into
+            shadowRoots — children may not render in the rasterise.
+            <code>captureDiagnostics.shadowDomDepthInCrop</code>
+            should be &gt; 0 here.
+          </p>
+        </header>
+        <div class="target">
+          <div id="shadow-host" style="width: 100%; height: 100%"></div>
+        </div>
+      </section>
+
+      <!-- ─── CASE 9 — cross-origin iframe ───────────────────────── -->
+      <section class="case">
+        <header>
+          <div class="tag">case 9</div>
+          <h2>Cross-origin &lt;iframe&gt;</h2>
+          <p class="why">
+            Iframes are an opaque rectangle to html-to-image.
+            <code>captureDiagnostics.hasIframeInCrop</code> should be
+            true. Layer-2 (tab-share) is the only way to capture
+            iframe pixels.
+          </p>
+        </header>
+        <div class="target">
+          <iframe
+            src="https://example.com"
+            style="width: 100%; height: 100%; border: 0; display: block; border-radius: 10px"
+            title="cross-origin"
+          ></iframe>
+        </div>
+      </section>
+
+      <!-- ─── CASE 11 — transform parent ─────────────────────────── -->
+      <section class="case case-transform">
+        <header>
+          <div class="tag">case 11</div>
+          <h2>Element inside transform: scale() parent</h2>
+          <p class="why">
+            Transformed parents can confuse the crop coordinate math
+            — element bbox doesn't account for the transform. Crop
+            may miss the visual position.
+          </p>
+        </header>
+        <div class="target">SCALED 0.92 · TILT -1.5°</div>
+      </section>
+
+      <!-- ─── CASE 10 — sticky element ───────────────────────────── -->
+      <section class="case case-sticky">
+        <header>
+          <div class="tag">case 10</div>
+          <h2>position:sticky partially out of viewport</h2>
+          <p class="why">
+            Scroll the page; this target hugs the top. Pick it while
+            it's at the edge. Crop may be computed before the
+            element's final position settles.
+          </p>
+        </header>
+        <div class="target">STICKY</div>
+        <div class="filler"></div>
+      </section>
+    </div>
+
+    <div class="legend">
+      Open DevTools.<br />
+      Run <code>window.__insitueDebug__ = true</code><br />
+      Then pick a <code>.target</code>.<br />
+      Crop rect renders briefly after each pick.<br />
+      Inspect <code>window.__insitue_capture__.bundle.captureDiagnostics</code>
+    </div>
+
+    <!-- ── Companion-sink mount (no projectKey ⇒ companion sink). ── -->
+    <!-- The SDK comes from the workspace dev build; serve.mjs sets
+         the import map so it resolves from /dist. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@insitue/sdk/capture-only": "/sdk/dist/capture-only.js"
+        }
+      }
+    </script>
+    <script type="module">
+      import { mountCaptureOnly } from "@insitue/sdk/capture-only";
+
+      mountCaptureOnly();
+
+      // Case 6 — paint something on the canvas continuously so it's
+      // not just empty.
+      const c = document.getElementById("case-canvas");
+      const ctx = c.getContext("2d");
+      let t = 0;
+      function paint() {
+        ctx.fillStyle = "#0ea5e9";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.fillStyle = "#fbbf24";
+        const x = (Math.sin(t / 30) + 1) * (c.width / 2 - 40);
+        ctx.fillRect(x, 60, 80, 80);
+        ctx.fillStyle = "white";
+        ctx.font = "bold 64px sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("CANVAS", c.width / 2, c.height / 2 + 24);
+        t++;
+        requestAnimationFrame(paint);
+      }
+      paint();
+
+      // Case 8 — attach an open shadowRoot with rendered content.
+      const host = document.getElementById("shadow-host");
+      const root = host.attachShadow({ mode: "open" });
+      root.innerHTML = `
+        <style>
+          :host { display:block; width:100%; height:100%; }
+          .inner {
+            width:100%; height:100%;
+            background: linear-gradient(45deg, #16a34a, #84cc16);
+            display:flex; align-items:center; justify-content:center;
+            color:#fff; font:800 32px/1 sans-serif;
+            border-radius: 10px;
+          }
+        </style>
+        <div class="inner">SHADOW</div>
+      `;
+
+      // Stamp the SDK version into the header (best-effort — the
+      // import-map'd path returns the workspace build, which doesn't
+      // necessarily export __SDK_VERSION__ at the module top level.)
+      try {
+        const sdk = await import("@insitue/sdk/capture-only");
+        const v =
+          /** @type any */ (sdk).__SDK_VERSION__ ?? "(workspace dev)";
+        document.getElementById("sdk-version").textContent = v;
+      } catch {
+        document.getElementById("sdk-version").textContent = "(unknown)";
+      }
+    </script>
+  </body>
+</html>

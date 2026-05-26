@@ -8,6 +8,7 @@ starting point.
 |---|---|---|
 | [`playground/`](./playground/README.md) | Vanilla HTML, no bundler, no framework | `mountCaptureOnly()` from `@insitue/sdk/capture-only` |
 | [`react-app/`](./react-app/README.md) | Vite + React 19 | `<InSitueCapture />` / `<InSitue />` with the babel source-attribution plugin |
+| [`screenshot-stress/`](./screenshot-stress/README.md) | Vanilla HTML, no bundler | 11-case battery for the inconsistent-blank-capture investigation (insitue#10) |
 
 Both connect to the local `@insitue/companion` on the default
 loopback port (`5747`). You'll want it running in another terminal:
