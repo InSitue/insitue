@@ -29,5 +29,9 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --filter @insitue/sdk exec playwright install --with-deps chromium
       - run: pnpm --filter @insitue/sdk run test
+      # End-to-end real-browser drive over examples/screenshot-stress.
+      # The unit tests above mock the runtime; this exercises the actual
+      # html-to-image pipeline against every known-tricky DOM shape.
+      - run: pnpm --filter @insitue/sdk run test:stress
 
       - run: pnpm license:check
