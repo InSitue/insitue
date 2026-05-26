@@ -175,12 +175,20 @@ async function renderViewportCrop(
   //       in directly from the live page (CORS-friendly only).
   //    c) If (b) also throws: paint a labeled placeholder so the
   //       bundle still ships *something* (handled outside this fn).
+  // CRITICAL: `cacheBust: false`. html-to-image's cacheBust appends
+  // `?t=<timestamp>` to every image URL — which BREAKS `data:` URLs
+  // (they don't accept query params). One data-URL img on the page
+  // (including our own `IMAGE_PLACEHOLDER`) makes the whole render
+  // throw a `<img>.onerror` Event. Discovered in dogfood with the
+  // stress page's `data:image/svg+xml` hero img. We don't need
+  // cache busting in a one-shot capture anyway — the browser's
+  // HTTP cache is exactly what we want to read from.
   let fullCanvas: HTMLCanvasElement | null = null;
   let htiError: Error | null = null;
   try {
     fullCanvas = await toCanvas(document.documentElement, {
       pixelRatio,
-      cacheBust: true,
+      cacheBust: false,
       backgroundColor,
       imagePlaceholder: IMAGE_PLACEHOLDER,
       filter: (n) =>
@@ -193,33 +201,32 @@ async function renderViewportCrop(
     htiError = describeHtmlToImageError(e);
     // eslint-disable-next-line no-console
     console.warn(
-      "[insitue] html-to-image full render failed, retrying without images:",
+      "[insitue] html-to-image full render failed, retrying without imgs:",
       htiError.message,
     );
+    // Mutate the live DOM: replace every <img>.src with a
+    // 1×1 transparent PNG before rendering, then restore after.
+    // html-to-image's filter doesn't reliably skip the embed step;
+    // the only sure way to avoid `<img>.onerror` is to make every
+    // src trivially loadable. drawAbsoluteImagesOnto layers the
+    // real bitmaps back in afterwards.
+    const TRANSPARENT_PNG =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+    const imgs = Array.from(document.querySelectorAll("img"));
+    const originals = imgs.map((i) => i.getAttribute("src"));
     try {
+      for (const img of imgs) img.setAttribute("src", TRANSPARENT_PNG);
       fullCanvas = await toCanvas(document.documentElement, {
         pixelRatio,
-        cacheBust: false, // skip refetch; we're filtering out imgs anyway
+        cacheBust: false,
         backgroundColor,
         imagePlaceholder: IMAGE_PLACEHOLDER,
-        filter: (n) => {
-          if (
+        filter: (n) =>
+          !(
             n instanceof Element &&
             n.closest?.("#insitue-root, [data-insitue-layer]")
-          ) {
-            return false;
-          }
-          // Strip every <img> + <image> from the SVG → foreignObject
-          // pipeline. The drawAbsoluteImagesOnto step below tries to
-          // layer them back in from the live DOM.
-          if (n instanceof HTMLImageElement || n instanceof SVGImageElement) {
-            return false;
-          }
-          return true;
-        },
+          ),
       });
-      // First attempt failed but second succeeded — don't show the
-      // placeholder; just note the degradation in the diagnostics.
       htiError = null;
     } catch (e2) {
       htiError = describeHtmlToImageError(e2);
@@ -228,6 +235,13 @@ async function renderViewportCrop(
         "[insitue] html-to-image both attempts failed:",
         htiError.message,
       );
+    } finally {
+      // Always restore — never leave the page in a degraded state.
+      for (let i = 0; i < imgs.length; i++) {
+        const orig = originals[i];
+        if (orig == null) imgs[i]!.removeAttribute("src");
+        else imgs[i]!.setAttribute("src", orig);
+      }
     }
   }
 
