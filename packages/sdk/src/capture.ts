@@ -185,17 +185,29 @@ async function renderViewportCrop(
   // HTTP cache is exactly what we want to read from.
   let fullCanvas: HTMLCanvasElement | null = null;
   let htiError: Error | null = null;
+  // Defensive filter — see `shouldSkipForHti` below for the
+  // enumerated reasons. ONE problematic element on the page
+  // (e.g. a `<video>` with no src AND no poster) kills the entire
+  // html-to-image render via internal `resourceToDataURL("")` →
+  // fetch(page) → `<img>.src = data:text/html;base64,<page HTML>` →
+  // load fails → entire toCanvas rejects. We filter those out
+  // upfront so the render always succeeds.
+  const filterForHtmlToImage = (n: Node): boolean => {
+    if (
+      n instanceof Element &&
+      n.closest?.("#insitue-root, [data-insitue-layer]")
+    ) {
+      return false;
+    }
+    return !shouldSkipForHti(n);
+  };
   try {
     fullCanvas = await toCanvas(document.body, {
       pixelRatio,
       cacheBust: false,
       backgroundColor,
       imagePlaceholder: IMAGE_PLACEHOLDER,
-      filter: (n) =>
-        !(
-          n instanceof Element &&
-          n.closest?.("#insitue-root, [data-insitue-layer]")
-        ),
+      filter: filterForHtmlToImage,
     });
   } catch (e) {
     htiError = describeHtmlToImageError(e);
@@ -221,11 +233,7 @@ async function renderViewportCrop(
         cacheBust: false,
         backgroundColor,
         imagePlaceholder: IMAGE_PLACEHOLDER,
-        filter: (n) =>
-          !(
-            n instanceof Element &&
-            n.closest?.("#insitue-root, [data-insitue-layer]")
-          ),
+        filter: filterForHtmlToImage,
       });
       htiError = null;
     } catch (e2) {
@@ -527,6 +535,34 @@ function computeObjectFitSource(
  *  the layer-2 `getDisplayMedia` escalation — so the user gets a
  *  pixel-perfect capture (with permission) instead of a silent
  *  empty image. */
+/** Enumerated elements that, if left in the DOM, will reliably break
+ *  html-to-image's render with no useful error message. We filter
+ *  these out upfront so the screenshot ALWAYS lands.
+ *
+ *  Confirmed cases:
+ *
+ *  - **`<video>` with no `src` AND no `poster`** — `cloneVideoElement`
+ *    falls through to `resourceToDataURL("", "", options)`, which does
+ *    `fetch("")` which resolves to the current page URL. The browser
+ *    returns the page HTML with `content-type: text/html`. html-to-
+ *    image base64-encodes it as `data:text/html;base64,<page HTML>` and
+ *    assigns to its internal `<img>.src`. The img can't load HTML →
+ *    rejects with an onerror Event → entire toCanvas throws.
+ *    Confirmed in dogfood with the stress page; reproducible in
+ *    isolation with `<video></video>` on any page.
+ *
+ *  Add more entries here as we find them — each one with a comment
+ *  explaining the failure mode. Better to filter known-broken
+ *  elements out than ship a generic try/catch that hides bugs. */
+function shouldSkipForHti(n: Node): boolean {
+  if (n instanceof HTMLVideoElement) {
+    const hasSrc = !!(n.currentSrc || n.src);
+    const hasPoster = !!n.poster;
+    if (!hasSrc && !hasPoster) return true;
+  }
+  return false;
+}
+
 /** Stringify whatever html-to-image (and its foreignObject pipeline)
  *  rejected with. The most common failure is an `<img>.onerror` event
  *  bubbling up — that's an `Event` object, not an Error. Default

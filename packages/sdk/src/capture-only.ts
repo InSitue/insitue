@@ -40,6 +40,8 @@ import { beginPick } from "./picker.js";
 import { buildBundle } from "./capture.js";
 import { CompanionClient } from "./client.js";
 
+export { buildBundle };
+
 /** Where captures go. Auto-detected from `projectKey` if omitted. */
 export type CaptureSink =
   | { kind: "cloud"; projectKey: string; endpoint?: string }
