@@ -116,6 +116,7 @@ function findContextAncestor(el: RasterisableElement): RasterisableElement {
 async function renderViewportCrop(
   cropRect: DOMRect,
   pixelRatio: number,
+  placeholderMeta: PlaceholderMeta,
 ): Promise<{
   dataUrl: string | null;
   /** True when the rasterised canvas's 16-pixel sample grid hit a
@@ -126,10 +127,12 @@ async function renderViewportCrop(
   blankScore: number;
   failedImages: Set<HTMLImageElement>;
   /** When set, the screenshot ISN'T an actual rasterise — it's the
-   *  labeled placeholder we paint when html-to-image throws (#10
-   *  / 0.5.0 — no silent failures). The string is the underlying
-   *  error, suitable for the bundle's qualityNote. */
-  placeholderReason?: string;
+   *  "selection captured" placeholder. Two trigger paths:
+   *    - "rasterise-error": html-to-image threw on both attempts.
+   *    - "looks-blank": rasterise succeeded but the sample grid was
+   *      bytewise uniform (e.g. case 4 — CSS bg-image that html-to-
+   *      image silently drops, leaving a solid fill). */
+  placeholderReason?: "rasterise-error" | "looks-blank";
 }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
@@ -254,24 +257,16 @@ async function renderViewportCrop(
   }
 
   if (!fullCanvas) {
-    // html-to-image gave up. Paint a labeled placeholder onto the
-    // out canvas so the bundle ships a screenshot (even if
-    // honestly degraded) rather than nothing. The qualityNote on
-    // the bundle tells the reviewer why.
-    const reason = htiError?.message ?? "rasterise failed (no error message)";
-    paintCapturePlaceholder(
-      ctx,
-      out.width,
-      out.height,
-      backgroundColor,
-      reason,
-    );
+    // html-to-image gave up. Paint the "selection captured"
+    // placeholder onto the out canvas so the bundle ships a clean
+    // confirmation card rather than nothing.
+    paintCapturePlaceholder(ctx, out.width, out.height, placeholderMeta);
     return {
       dataUrl: out.toDataURL("image/png"),
       looksBlank: false,
       blankScore: 0,
       failedImages,
-      placeholderReason: reason,
+      placeholderReason: "rasterise-error",
     };
   }
 
@@ -328,6 +323,38 @@ async function renderViewportCrop(
     out.height,
   );
   detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
+
+  // Fully-uniform raster — html-to-image returned bytes but every
+  // sample is bytewise identical. Two possibilities:
+  //   a) Render-fail: the element painted nothing, so we're seeing
+  //      the page background bleeding through (case 4: bg-image
+  //      dropped, surface is the white body bg).
+  //   b) Legitimate uniform content: a solid-colour `<img>`, a
+  //      flat-painted card, a green tile.
+  //
+  // Differentiate by comparing the uniform fill to the resolved
+  // page background. If they match → render-fail → swap in the
+  // "Selection captured" card. If they don't → the pixels ARE the
+  // content (even if uniform) → ship as-is.
+  //
+  // IMG / CANVAS / VIDEO get an additional escape (the
+  // `canBeUniformContent` flag) so legitimate solid-colour media
+  // never gets misread as a fail.
+  if (
+    looksBlank &&
+    !placeholderMeta.canBeUniformContent &&
+    sampledFillMatchesBackground(ctx, out.width, out.height, backgroundColor)
+  ) {
+    paintCapturePlaceholder(ctx, out.width, out.height, placeholderMeta);
+    return {
+      dataUrl: out.toDataURL("image/png"),
+      looksBlank,
+      blankScore,
+      failedImages,
+      placeholderReason: "looks-blank",
+    };
+  }
+
   return {
     dataUrl: out.toDataURL("image/png"),
     looksBlank,
@@ -600,42 +627,127 @@ function truncate(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
 }
 
-/** Paint a labeled placeholder when the html-to-image render fails
- *  entirely. The bundle still ships a screenshot — a clearly-labeled
- *  one — instead of nothing. Honest degradation: better a "we
- *  couldn't render this" thumbnail than the widget feeling broken.
- *  (insitue#10 / 0.5.0 — no silent failures in the core flow.) */
+/** Paint the "selection captured" placeholder. Replaces the actual
+ *  screenshot when either html-to-image gave up entirely OR the
+ *  shipped raster sampled as fully uniform (the failure mode behind
+ *  case 4 in the stress page: CSS bg-images that html-to-image can't
+ *  embed render as solid background colour, which technically returns
+ *  bytes but visually communicates nothing).
+ *
+ *  Designed to read as a confirmation card — light surface, the
+ *  picked element's tag chip top-left, a centered reassurance, and
+ *  the selector + dimensions in mono below. The reviewer should know
+ *  immediately that the right element was captured, even though the
+ *  bitmap couldn't be rasterised. (Design benchmark: Vercel/Linear/
+ *  Resend — restrained, hierarchical, never apologetic.) */
 function paintCapturePlaceholder(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-  bg: string,
-  reason: string,
+  meta: PlaceholderMeta,
 ): void {
-  ctx.fillStyle = bg;
+  // Base surface — neutral light. Reads cleanly inside both the
+  // companion sink's dark compose panel and the cloud sink's white
+  // card.
+  const surface = "#fafafa";
+  const border = "#e7e7ea";
+  const ink = "#16161a";
+  const sub = "#6b6c77";
+  const faint = "#a3a3ac";
+  const brand = "#ff6b00";
+  const sans = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+  const mono = '"SF Mono", ui-monospace, Menlo, Consolas, monospace';
+
+  ctx.fillStyle = surface;
   ctx.fillRect(0, 0, w, h);
-  // Diagonal hatch so it doesn't look like a real screenshot.
-  ctx.strokeStyle = "rgba(120,120,140,0.18)";
-  ctx.lineWidth = Math.max(1, Math.round(w / 280));
-  const step = Math.max(16, Math.round(w / 28));
-  for (let x = -h; x < w + h; x += step) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x + h, h);
-    ctx.stroke();
-  }
-  // Label box.
-  const fontPx = Math.max(11, Math.round(w / 32));
-  ctx.font = `600 ${fontPx}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.fillStyle = "rgba(0,0,0,0.75)";
+
+  // Inset stroke — single hairline, hugs the canvas edge.
+  ctx.strokeStyle = border;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+
+  // Scale-aware type ramp. Anchored on the smaller dimension so a
+  // tall narrow crop and a short wide crop both look balanced. Clamps
+  // keep things legible on extreme sizes.
+  const base = Math.min(w, h);
+  const headlinePx = Math.max(14, Math.min(20, Math.round(base / 12)));
+  const subPx = Math.max(11, Math.min(14, Math.round(headlinePx * 0.78)));
+  const monoPx = Math.max(10, Math.min(13, Math.round(headlinePx * 0.72)));
+  const chipTextPx = Math.max(9, Math.min(11, Math.round(headlinePx * 0.6)));
+  const pad = Math.max(14, Math.round(base / 14));
+
+  // Top-left: brand dot + uppercase tag chip.
+  const dotR = Math.max(3, Math.round(chipTextPx * 0.42));
+  const dotX = pad + dotR;
+  const dotY = pad + dotR;
+  ctx.fillStyle = brand;
+  ctx.beginPath();
+  ctx.arc(dotX, dotY, dotR, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.font = `600 ${chipTextPx}px ${mono}`;
+  ctx.fillStyle = ink;
   ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  ctx.fillText(meta.tag.toUpperCase(), dotX + dotR + 8, dotY + 0.5);
+
+  // Centered cluster: headline + reassurance + selector + dims.
   ctx.textAlign = "center";
-  const title = "Screenshot couldn't be rendered";
-  const sub = reason.length > 90 ? reason.slice(0, 87) + "…" : reason;
-  ctx.fillText(title, w / 2, h / 2 - fontPx * 0.7);
-  ctx.fillStyle = "rgba(0,0,0,0.55)";
-  ctx.font = `400 ${Math.max(10, Math.round(fontPx * 0.78))}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
-  ctx.fillText(sub, w / 2, h / 2 + fontPx * 0.55);
+  ctx.textBaseline = "alphabetic";
+
+  // Gap between lines, scaled to headline.
+  const gap = Math.round(headlinePx * 0.55);
+  const monoGap = Math.round(monoPx * 0.5);
+
+  // Total cluster height for vertical centering.
+  const clusterH = headlinePx + gap + subPx + gap * 2 + monoPx + monoGap + monoPx;
+  let y = Math.round((h - clusterH) / 2 + headlinePx);
+
+  ctx.font = `600 ${headlinePx}px ${sans}`;
+  ctx.fillStyle = ink;
+  ctx.fillText("Selection captured", w / 2, y);
+
+  y += gap + subPx;
+  ctx.font = `400 ${subPx}px ${sans}`;
+  ctx.fillStyle = sub;
+  ctx.fillText("This is the element you picked.", w / 2, y);
+
+  y += gap * 2 + monoPx;
+  ctx.font = `500 ${monoPx}px ${mono}`;
+  ctx.fillStyle = sub;
+  const selectorText = truncateForWidth(
+    ctx,
+    meta.selector,
+    w - pad * 2,
+  );
+  ctx.fillText(selectorText, w / 2, y);
+
+  y += monoGap + monoPx;
+  ctx.font = `400 ${monoPx}px ${mono}`;
+  ctx.fillStyle = faint;
+  ctx.fillText(
+    `${meta.widthPx} × ${meta.heightPx} @ ${meta.dpr}x`,
+    w / 2,
+    y,
+  );
+}
+
+/** Trim a string with an ellipsis until it fits the given pixel
+ *  width under the current ctx font. Used for long selectors. */
+function truncateForWidth(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number,
+): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    if (ctx.measureText(text.slice(0, mid) + "…").width <= maxWidth) lo = mid;
+    else hi = mid - 1;
+  }
+  return text.slice(0, lo) + "…";
 }
 
 function detectUnrenderedImages(
@@ -705,6 +817,25 @@ function detectUnrenderedImages(
   }
 }
 
+/** Metadata about the picked element, threaded into the placeholder
+ *  painter so the placeholder reads as a confirmation card ("we got
+ *  the right element, here's its tag/selector/size") rather than an
+ *  error. Built in `buildBundle` from `el` + selector helper. */
+export interface PlaceholderMeta {
+  tag: string;
+  selector: string;
+  widthPx: number;
+  heightPx: number;
+  dpr: number;
+  /** True for IMG / CANVAS / VIDEO — elements where uniform pixels
+   *  are legitimately content (a solid-colour image, a blank
+   *  canvas, a single-frame video) rather than a render-fail signal.
+   *  Suppresses the `looks-blank → placeholder` swap so the actual
+   *  captured pixels ship through. Rasterise-error swap still fires
+   *  regardless. */
+  canBeUniformContent: boolean;
+}
+
 /** Cheap blank-detection — sample 16 evenly spaced pixels.
  *
  *  `looksBlank` is the single-color verdict (every sampled pixel
@@ -718,6 +849,68 @@ function detectUnrenderedImages(
  *  Surfaced in `captureDiagnostics.shippedBlankScore` (insitue#10)
  *  for aggregate analysis: a hard `looksBlank` threshold might miss
  *  near-blank cases, but `score > 0.9` is a useful warning signal. */
+/** True when the canvas's centre pixel matches the resolved page
+ *  background colour — the signal we use to distinguish "render
+ *  failed and we're seeing the page bg" from "uniform pixels are
+ *  legitimate content (a solid-colour card)."
+ *
+ *  Parses the CSS background colour string (e.g. `rgb(255, 255, 255)`)
+ *  into [r,g,b,a], then compares with a tolerance of ±6 per channel
+ *  to absorb tiny sub-pixel rasterisation drift. */
+function sampledFillMatchesBackground(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  bg: string,
+): boolean {
+  const bgRgba = parseCssRgba(bg);
+  if (!bgRgba) return false;
+  try {
+    const px = ctx.getImageData(Math.floor(w / 2), Math.floor(h / 2), 1, 1)
+      .data;
+    const dr = Math.abs(px[0]! - bgRgba[0]);
+    const dg = Math.abs(px[1]! - bgRgba[1]);
+    const db = Math.abs(px[2]! - bgRgba[2]);
+    return dr <= 6 && dg <= 6 && db <= 6;
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort parse of a CSS colour string (`rgb(…)`, `rgba(…)`,
+ *  `#rrggbb`, `#rgb`) into [r,g,b,a]. Returns null on anything
+ *  exotic — caller treats that as "can't compare, ship as-is". */
+function parseCssRgba(s: string): [number, number, number, number] | null {
+  const m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/i);
+  if (m) {
+    return [
+      Number(m[1]),
+      Number(m[2]),
+      Number(m[3]),
+      m[4] != null ? Math.round(Number(m[4]) * 255) : 255,
+    ];
+  }
+  const hex = s.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const h = hex[1]!;
+    if (h.length === 3) {
+      return [
+        parseInt(h[0]! + h[0]!, 16),
+        parseInt(h[1]! + h[1]!, 16),
+        parseInt(h[2]! + h[2]!, 16),
+        255,
+      ];
+    }
+    return [
+      parseInt(h.slice(0, 2), 16),
+      parseInt(h.slice(2, 4), 16),
+      parseInt(h.slice(4, 6), 16),
+      255,
+    ];
+  }
+  return null;
+}
+
 function looksBlankUniform(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -978,6 +1171,21 @@ export async function buildBundle(
     let shippedLooksBlank = false;
     let failedImagesCount = 0;
 
+    // Build the placeholder card metadata up-front so the painter
+    // has tag + selector + dimensions ready if it needs to swap.
+    const placeholderMeta: PlaceholderMeta = {
+      tag: el.tagName.toLowerCase(),
+      selector: buildSelector(el),
+      widthPx: Math.round(pickedRect.width),
+      heightPx: Math.round(pickedRect.height),
+      dpr: Math.round(dpr * 10) / 10,
+      canBeUniformContent:
+        el instanceof HTMLImageElement ||
+        el instanceof HTMLCanvasElement ||
+        el instanceof HTMLVideoElement ||
+        el instanceof SVGElement,
+    };
+
     try {
       // Single capture path: html-to-image rasterise of the full
       // document, cropped to the picked element's surroundings.
@@ -990,7 +1198,11 @@ export async function buildBundle(
       // never a silent blank.
       const t0 = performance.now();
       try {
-        const r = await renderViewportCrop(cropRect, pixelRatioUsed);
+        const r = await renderViewportCrop(
+          cropRect,
+          pixelRatioUsed,
+          placeholderMeta,
+        );
         const dur = performance.now() - t0;
         failedImagesCount = r.failedImages.size;
         const quality = assessCaptureQuality(cropRect, r.failedImages);
@@ -1005,24 +1217,18 @@ export async function buildBundle(
           ...(!r.dataUrl ? { error: "renderViewportCrop returned null" } : {}),
         });
         if (r.dataUrl) {
-          // Even when looksBlank=true (a uniform-color sample grid)
-          // we still ship: small picks of solid-color surfaces are
-          // legitimately uniform, and the qualityNote tells the
-          // reviewer what we saw.
-          //
-          // `placeholderReason` (set when html-to-image threw and
-          // we painted the labeled placeholder) takes priority — it
-          // tells the reviewer the screenshot is structurally a
-          // placeholder, not a real capture.
+          // `placeholderReason` set ⇒ we shipped the "selection
+          // captured" card instead of the raster (either html-to-
+          // image threw, or the raster came back fully uniform).
+          // The card itself carries the message; the qualityNote
+          // gives the reviewer one short reassuring line.
           const qualityNote = r.placeholderReason
-            ? `screenshot couldn't be rendered: ${r.placeholderReason}`
-            : r.looksBlank
-              ? "captured image looks uniform — small picks against solid backgrounds can read as blank, or the embed step may have dropped an element"
-              : quality.unembeddableImages > 0 ||
-                  quality.hasVideo ||
-                  quality.hasCanvas
-                ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
-                : undefined;
+            ? "Element selection confirmed — describe what to change below."
+            : quality.unembeddableImages > 0 ||
+                quality.hasVideo ||
+                quality.hasCanvas
+              ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
+              : undefined;
           screenshot = {
             mime: "image/png",
             dataUrl: r.dataUrl,
