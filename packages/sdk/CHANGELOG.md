@@ -1,5 +1,21 @@
 # @insitue/sdk
 
+## 0.4.18
+
+- **Hotfix: no more "Screenshot unavailable" loops.** Real-world
+  dogfooding surfaced a UX dead-end on companion sink: with
+  `alwaysPixelPerfect: true` (default) and the user declining the
+  tab-share prompt once, EVERY subsequent capture surfaced
+  `screenshotUnavailable: "tab capture declined"` with no recovery
+  path. Now: layer-1 rasterise runs as a safety net so the user
+  gets *something* + a qualityNote pointing at the retry affordance.
+- **Retry button now fires on `screenshotUnavailable`**, not just
+  `qualityNote`. Previously: when the SDK couldn't get any
+  screenshot at all (the worst case), the retry button was hidden
+  — gating logic was on `screenshot.qualityNote` which didn't exist.
+  Now: any `screenshotUnavailable` mentioning tab capture surfaces
+  a "Retry pixel-perfect" affordance regardless of sink.
+
 ## 0.4.17
 
 - **Capture telemetry (insitue#10 Phase 1).** Every bundle now ships

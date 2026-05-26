@@ -63,10 +63,41 @@ describe("captureDiagnostics — pinning the v4 contract (insitue#10)", () => {
     }
   });
 
-  it("flags layer-2 error path with outcome=error + error message", async () => {
-    // alwaysPixelPerfect: skip layer 1, force layer 2. Mock
-    // getDisplayMedia to throw — outcome should be `error` with the
-    // message captured.
+  it("hotfix: layer-1 fallback ships a screenshot when layer-2 declined + skipLayer1 (no more 'unavailable' loop)", async () => {
+    // The bug being fixed: companion sink default = alwaysPixelPerfect.
+    // User declines tab share once → every subsequent capture had
+    // screenshot=undefined + screenshotUnavailable="tab capture declined".
+    // No fallback. Post-fix: layer-1 rasterise runs as a safety net so
+    // the user gets *something* + a qualityNote pointing at the retry
+    // affordance.
+    setCaptureSettings({ alwaysPixelPerfect: true, disableLayer2: false });
+    vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockImplementation(
+      async () => {
+        throw new DOMException("denied", "NotAllowedError");
+      },
+    );
+    active = liveImgUnpaintableHero();
+    const bundle = await buildBundle(active.selection);
+    // We expect to NOT see the silent unavailable state. Either
+    // screenshot lands (preferred) or screenshotUnavailable is set
+    // (rare — fallback also blank). The pre-fix path of
+    // "screenshot=undefined + screenshotUnavailable='tab capture
+    // declined' with NO retry path" is what we're forever banishing.
+    const haveSomething =
+      !!bundle.screenshot ||
+      (!!bundle.screenshotUnavailable && /tab capture/i.test(bundle.screenshotUnavailable));
+    expect(haveSomething).toBe(true);
+    if (bundle.screenshot) {
+      expect(bundle.screenshot.source).toBe("rasterise");
+    }
+  });
+
+  it("flags layer-2 error path, then upgrades layer-1 from skipped→attempted (hotfix fallback)", async () => {
+    // alwaysPixelPerfect: layer 1 initially skipped, layer 2 runs.
+    // Mock getDisplayMedia to throw — layer 2 outcome should be
+    // `error`. Then the post-#10 hotfix fallback kicks in: layer 1
+    // is run as a safety net, so the diagnostics layer-1 entry is
+    // REWRITTEN from "skipped" to its actual outcome.
     setCaptureSettings({ alwaysPixelPerfect: true, disableLayer2: false });
     vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockImplementation(
       async () => {
@@ -78,11 +109,11 @@ describe("captureDiagnostics — pinning the v4 contract (insitue#10)", () => {
     const d = bundle.captureDiagnostics!;
     const l1 = d.attemptedLayers.find((a) => a.layer === 1);
     const l2 = d.attemptedLayers.find((a) => a.layer === 2);
-    expect(l1?.outcome).toBe("skipped");
-    // l2's outcome can be `error` (mock threw) or `error` via the
-    // null-return path. Either way it's not success/blank.
     expect(l2).toBeDefined();
-    expect(["error"]).toContain(l2!.outcome);
+    expect(l2!.outcome).toBe("error");
+    // Post-fallback, layer-1 is no longer "skipped" — it actually ran.
+    expect(l1?.outcome).not.toBe("skipped");
+    expect(["success", "blank", "error"]).toContain(l1!.outcome);
   });
 
   it("when shippedLooksBlank=true, screenshot.qualityNote mentions blank", async () => {

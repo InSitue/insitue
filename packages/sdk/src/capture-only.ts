@@ -956,32 +956,47 @@ function CaptureApp(props: AppProps) {
               `Screenshot unavailable — ${bundle.screenshotUnavailable}`,
             )
           : null,
-      // Tab-capture upgrade prompt. Two-tier policy:
+      // Tab-capture upgrade prompt. Three-tier policy:
+      //   - **screenshotUnavailable mentioning declined/unavailable tab
+      //     capture** → ALWAYS show retry (highest priority — user
+      //     literally has nothing to look at). Previously this block
+      //     gated on `screenshot.qualityNote`, leaving users stuck in
+      //     a "Screenshot unavailable" loop with no recovery (real
+      //     dogfood, insitue#10 hotfix). Now: screenshot OR
+      //     screenshotUnavailable both trigger it.
       //   - **Dev sink** (companion): show on any qualityNote — devs
       //     dogfooding the local loop want the cleanest screenshot.
       //   - **Cloud sink** (end users reporting bugs): show ONLY when
-      //     the screenshot is actually blank (insitue#10). Generic
-      //     fidelity nags during a bug report cost more reports than
-      //     they improve, but a BLANK is the bug they're losing visibility
-      //     into — they should see the retry option.
+      //     the screenshot is actually blank. Generic fidelity nags
+      //     during a bug report cost more reports than they improve,
+      //     but a BLANK is the bug they're losing visibility into.
       // `captureDiagnostics.shippedLooksBlank` is the v4 signal; before
       // v4 we fall back to a regex on the qualityNote string.
       (() => {
-        if (tabCaptureActive || !bundle?.screenshot?.qualityNote) return null;
+        if (tabCaptureActive) return null;
+        const unavailReason = bundle?.screenshotUnavailable ?? "";
+        const isTabCaptureUnavail =
+          /tab capture/i.test(unavailReason) ||
+          /grant tab capture/i.test(unavailReason);
+        if (!bundle?.screenshot?.qualityNote && !isTabCaptureUnavail) {
+          return null;
+        }
+        const qualityNote = bundle?.screenshot?.qualityNote ?? "";
         const looksBlank =
-          bundle.captureDiagnostics?.shippedLooksBlank ??
-          /blank/i.test(bundle.screenshot.qualityNote);
-        if (!isDev && !looksBlank) return null;
-        const label = looksBlank
-          ? "Screenshot looks blank. Enable tab capture to retry pixel-perfect."
-          : "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.";
-        const bg = looksBlank ? C.warnBg : C.warnBg;
-        const line = looksBlank ? C.warnLine : C.warnLine;
-        const ink = looksBlank ? C.warnInk : C.warnInk;
+          (bundle?.captureDiagnostics?.shippedLooksBlank ?? false) ||
+          /blank/i.test(qualityNote);
+        // Cloud sink suppresses the generic fidelity nag, but NOT the
+        // "you can't see anything" cases (unavailable / blank).
+        if (!isDev && !looksBlank && !isTabCaptureUnavail) return null;
+        const label = isTabCaptureUnavail
+          ? "Screenshot unavailable. Grant tab capture to see your pick."
+          : looksBlank
+            ? "Screenshot looks blank. Enable tab capture to retry pixel-perfect."
+            : "Some content didn't capture cleanly. Enable tab capture for a pixel-perfect screenshot.";
         return h(
           "div",
           {
-            style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:${bg};border:1px solid ${line};color:${ink};border-radius:10px;font-size:12px;margin-bottom:12px`,
+            style: `display:flex;align-items:center;gap:8px;padding:9px 11px;background:${C.warnBg};border:1px solid ${C.warnLine};color:${C.warnInk};border-radius:10px;font-size:12px;margin-bottom:12px`,
           },
           [
             h("span", { style: "flex:1" }, label),
@@ -991,7 +1006,9 @@ function CaptureApp(props: AppProps) {
                 onClick: () => void retryWithPixelPerfect(),
                 style: `all:unset;cursor:pointer;color:${C.accentSolid};font-weight:600;padding:2px 8px;border:1px solid ${C.line};border-radius:6px;background:${C.surface}`,
               },
-              looksBlank ? "Retry pixel-perfect" : "Enable",
+              isTabCaptureUnavail || looksBlank
+                ? "Retry pixel-perfect"
+                : "Enable",
             ),
           ],
         );

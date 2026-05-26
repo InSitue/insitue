@@ -1177,14 +1177,66 @@ export async function buildBundle(
           shippedBlankScore = layer1BlankScore;
           shippedLooksBlank = layer1LooksBlank;
         } else if (skipLayer1) {
-          // Rasterise was deliberately skipped (alwaysPixelPerfect),
-          // so the only failure mode here is the user declining the
-          // tab-share prompt (or the browser not supporting it).
-          // Reporting "rasterise failed" would be technically false
-          // and reads as "the SDK is broken" — see #61.
-          screenshotUnavailable = supportsDisplayMedia()
-            ? "tab capture was declined — grant it for pixel-perfect screenshots, or turn off “Always pixel-perfect” in the gear to fall back to the rasterise path"
-            : "tab capture unsupported in this browser — turn off “Always pixel-perfect” in the gear to fall back to the rasterise path";
+          // Rasterise was deliberately skipped (alwaysPixelPerfect)
+          // and layer 2 returned nothing. Don't give up — try layer 1
+          // NOW as a safety net so the user gets *some* screenshot
+          // instead of "Screenshot unavailable" on every subsequent
+          // capture (real-world dogfood, insitue#10).
+          //
+          // When this fires, we shipped a screenshot, but the gear
+          // setting still says alwaysPixelPerfect=true — so we tag
+          // the qualityNote so the reviewer (and the widget's retry
+          // button) know it's not actually pixel-perfect.
+          const t0 = performance.now();
+          let fallback: Awaited<ReturnType<typeof renderViewportCrop>> | null = null;
+          try {
+            fallback = await renderViewportCrop(cropRect, pixelRatioUsed);
+            const dur = performance.now() - t0;
+            // Rewrite the layer-1 attempt outcome (was "skipped") so
+            // the diagnostics record what actually happened.
+            const l1Idx = attempts.findIndex((a) => a.layer === 1);
+            if (l1Idx !== -1) {
+              attempts[l1Idx] = {
+                layer: 1,
+                outcome: !fallback.dataUrl
+                  ? "error"
+                  : fallback.looksBlank
+                    ? "blank"
+                    : "success",
+                durationMs: Math.round(dur),
+              };
+            }
+            if (fallback.dataUrl) {
+              failedImagesCount = fallback.failedImages.size;
+              quality = assessCaptureQuality(cropRect, fallback.failedImages);
+            }
+          } catch {
+            /* fall through to screenshotUnavailable below */
+          }
+          if (fallback?.dataUrl && !fallback.looksBlank) {
+            screenshot = {
+              mime: "image/png",
+              dataUrl: fallback.dataUrl,
+              bounds: {
+                x: cropRect.x,
+                y: cropRect.y,
+                width: cropRect.width,
+                height: cropRect.height,
+              },
+              source: "rasterise",
+              qualityNote: supportsDisplayMedia()
+                ? "tab capture was declined — using rasterise fallback. Click “Retry pixel-perfect” to re-prompt for tab share."
+                : "tab capture unsupported in this browser — using rasterise fallback.",
+            };
+            shippedBlankScore = fallback.blankScore;
+            shippedLooksBlank = false;
+          } else {
+            // Even the fallback rasterise was blank or failed —
+            // honest "we couldn't get anything" message.
+            screenshotUnavailable = supportsDisplayMedia()
+              ? "tab capture was declined and rasterise fallback was blank — grant tab capture for pixel-perfect screenshots, or pick a parent element"
+              : "tab capture unsupported and rasterise fallback was blank — pick a parent element";
+          }
         } else {
           // Layer 1 was attempted and produced nothing usable; layer 2
           // also declined or unsupported. Honest "both paths failed".

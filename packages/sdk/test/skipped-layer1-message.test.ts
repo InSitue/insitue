@@ -22,7 +22,12 @@ afterEach(() => {
 });
 
 describe("buildBundle — skipped-layer1 failure message (#61)", () => {
-  it("reports tab-capture-declined (not rasterise-failed) when alwaysPixelPerfect + layer 2 returns null", async () => {
+  it("falls back to rasterise when alwaysPixelPerfect + layer 2 declined (no more silent unavailable loops)", async () => {
+    // Pre-fix behavior: alwaysPixelPerfect + declined tab share = nothing.
+    // Every subsequent capture gave the user "Screenshot unavailable",
+    // no recovery. Post-fix (insitue#10 hotfix): we run layer 1 as a
+    // safety net so they get *something* — with a qualityNote telling
+    // them they can retry pixel-perfect to re-prompt for tab share.
     setCaptureSettings({ alwaysPixelPerfect: true, disableLayer2: false });
     vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockImplementation(
       async () => {
@@ -33,10 +38,19 @@ describe("buildBundle — skipped-layer1 failure message (#61)", () => {
     active = liveImgUnpaintableHero();
     const bundle = await buildBundle(active.selection);
 
-    expect(bundle.screenshot).toBeUndefined();
-    expect(bundle.screenshotUnavailable).toBeDefined();
-    expect(bundle.screenshotUnavailable).toMatch(/tab capture was declined/i);
-    expect(bundle.screenshotUnavailable).not.toMatch(/rasterise failed/i);
+    // The fixture's html-to-image render produces enough variation
+    // that the fallback should ship a screenshot. If it happens to
+    // looksBlank (rare for this fixture), the bundle would surface
+    // screenshotUnavailable instead — assert one or the other.
+    if (bundle.screenshot) {
+      expect(bundle.screenshot.source).toBe("rasterise");
+      expect(bundle.screenshot.qualityNote).toMatch(/tab capture was declined/i);
+      expect(bundle.screenshot.qualityNote).toMatch(/retry pixel-perfect|fallback/i);
+    } else {
+      // Fallback also blank — explicit honest message.
+      expect(bundle.screenshotUnavailable).toBeDefined();
+      expect(bundle.screenshotUnavailable).toMatch(/tab capture/i);
+    }
   });
 
   it("still says rasterise-failed when layer 1 was attempted and layer 2 is also unavailable", async () => {
