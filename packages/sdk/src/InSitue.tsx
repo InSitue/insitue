@@ -47,16 +47,6 @@ export interface InSitueCaptureProps {
    * companion).
    */
   sink?: CaptureSink;
-  /**
-   * Default the user's "Always pixel-perfect screenshots" setting
-   * to `true` on mount — every capture uses `getDisplayMedia`,
-   * paying a one-time tab-share permission per session in exchange
-   * for screenshots that are pixel-accurate across any content
-   * (next/image, video, canvas, cross-origin).
-   *
-   * Recommended for dev / dogfood; not for production end-users.
-   */
-  defaultPixelPerfect?: boolean;
 }
 
 /**
@@ -69,7 +59,6 @@ export function InSitueCapture({
   endpoint,
   onCapture,
   sink,
-  defaultPixelPerfect,
 }: InSitueCaptureProps): null {
   useEffect(() => {
     let active = true;
@@ -81,7 +70,6 @@ export function InSitueCapture({
           ...(endpoint ? { endpoint } : {}),
           ...(onCapture ? { onCapture } : {}),
           ...(sink ? { sink } : {}),
-          ...(defaultPixelPerfect !== undefined ? { defaultPixelPerfect } : {}),
         });
       }
     });
@@ -89,7 +77,7 @@ export function InSitueCapture({
       active = false;
       dispose?.();
     };
-  }, [projectKey, endpoint, onCapture, sink, defaultPixelPerfect]);
+  }, [projectKey, endpoint, onCapture, sink]);
   return null;
 }
 
