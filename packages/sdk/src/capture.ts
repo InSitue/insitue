@@ -186,7 +186,7 @@ async function renderViewportCrop(
   let fullCanvas: HTMLCanvasElement | null = null;
   let htiError: Error | null = null;
   try {
-    fullCanvas = await toCanvas(document.documentElement, {
+    fullCanvas = await toCanvas(document.body, {
       pixelRatio,
       cacheBust: false,
       backgroundColor,
@@ -216,7 +216,7 @@ async function renderViewportCrop(
     const originals = imgs.map((i) => i.getAttribute("src"));
     try {
       for (const img of imgs) img.setAttribute("src", TRANSPARENT_PNG);
-      fullCanvas = await toCanvas(document.documentElement, {
+      fullCanvas = await toCanvas(document.body, {
         pixelRatio,
         cacheBust: false,
         backgroundColor,
