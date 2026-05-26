@@ -14,8 +14,10 @@
 /** Bump when `CaptureBundle`'s shape changes; sinks branch on it.
  *  v2: additive `screenshotUnavailable` (M5 — honest screenshots).
  *  v3: additive `screenshot.source` + `screenshot.qualityNote`
- *      (pixel-perfect layered capture — rasterise vs display-media). */
-export const CAPTURE_SCHEMA_VERSION = 3 as const;
+ *      (pixel-perfect layered capture — rasterise vs display-media).
+ *  v4: additive `captureDiagnostics` (insitue#10 — telemetry-first
+ *      investigation of inconsistent blank captures). */
+export const CAPTURE_SCHEMA_VERSION = 4 as const;
 /** Bump when the WS envelope below changes; companion/SDK pin it.
  *  v2: agent edit-loop messages (M2). v3: session undo/commit (M3).
  *  v4: agent-activity (M6 — live "what it's doing" feedback). */
@@ -92,6 +94,85 @@ export interface CaptureTarget {
   };
 }
 
+/** Per-layer attempt record. The SDK tries layer-1 (html-to-image
+ *  rasterise) and/or layer-2 (getDisplayMedia OS-compositor grab)
+ *  in an order driven by `alwaysPixelPerfect`; this captures what
+ *  actually happened for each.
+ *
+ *  `outcome` semantics:
+ *  - `success` — produced an image AND the post-capture blank check
+ *    accepted it (the captured pixels are not a single uniform color).
+ *  - `blank` — produced an image but `looksBlank` rejected it. The
+ *    layer was tried; the result wasn't useful.
+ *  - `error` — threw or rejected. `error` field carries the message.
+ *  - `skipped` — strategy said "don't try this layer." E.g. layer-1
+ *    when `alwaysPixelPerfect: true`, or layer-2 when
+ *    `disableLayer2: true`. */
+export interface CaptureLayerAttempt {
+  layer: 1 | 2;
+  outcome: "success" | "blank" | "error" | "skipped";
+  durationMs: number;
+  error?: string;
+}
+
+/** Per-capture telemetry shape (insitue#10). Additive in schema v4.
+ *  Fields are intentionally flat / serializable / no DOM refs so the
+ *  bundle ships cleanly over the WS envelope and persists in jsonb. */
+export interface CaptureDiagnostics {
+  /** Which capture path was chosen. Mirrors the worker's branching;
+   *  surfaced as one field so the admin doesn't reconstruct from
+   *  attemptedLayers. */
+  strategy:
+    | "layer1-only"
+    | "layer2-only"
+    | "layer1-then-layer2"
+    | "layer1-degraded"
+    | "both-failed";
+  /** Ordered record of layers attempted + their per-layer outcome.
+   *  Reading top-to-bottom = the order they actually fired. */
+  attemptedLayers: CaptureLayerAttempt[];
+  /** Final-output blank verdict. `looksBlank` runs on whatever pixels
+   *  end up in the shipped screenshot (NOT just layer-1). When true,
+   *  the bundle's `screenshot.qualityNote` is also set so the
+   *  reviewer knows. */
+  shippedLooksBlank: boolean;
+  /** 0..1 fraction of the 16-point sample grid that hit a single
+   *  color. 1.0 = grid uniform; <1 = some pixel variation. Useful
+   *  for aggregate analysis (where's the blank-rate cliff?). */
+  shippedBlankScore?: number;
+  /** Viewport crop region that drove the final composite (CSS px). */
+  cropRect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    outsideViewport: boolean;
+  };
+  /** Bounding box of the picked element (CSS px), captured BEFORE
+   *  any composite. Useful for "the crop missed the element" debug. */
+  elementBbox: { x: number; y: number; width: number; height: number };
+  /** Effective device pixel ratio used by the rasterise (we clamp). */
+  pixelRatioUsed: number;
+  /** Count of `<img>` elements html-to-image silently dropped during
+   *  layer-1. Highest single-signal correlate with blank output. */
+  layer1FailedImages: number;
+  /** First few embed failures (capped at 3) so admins can see what
+   *  the host's CDN is doing — typical case: CORS-missing CDN. */
+  layer1EmbedFailures?: Array<{ src: string; reason: string }>;
+  /** Content type tripwires inside the crop. Known to make captures
+   *  brittle; aggregate stats here drive prioritization. */
+  hasVideoInCrop: boolean;
+  hasCanvasInCrop: boolean;
+  hasIframeInCrop: boolean;
+  /** Deepest Shadow DOM nesting under the picked element. >0 ⇒
+   *  html-to-image likely missed children. */
+  shadowDomDepthInCrop: number;
+  /** Truncated UA string for browser-distribution analysis. We
+   *  already gather most of this elsewhere; keeping a short copy
+   *  here keeps the diagnostics row self-contained. */
+  browserUA: string;
+}
+
 export interface CaptureBundle {
   schemaVersion: typeof CAPTURE_SCHEMA_VERSION;
   id: string;
@@ -118,6 +199,12 @@ export interface CaptureBundle {
    *  impossible — e.g. cross-origin media taints the canvas. Honest
    *  signal so the UI/sink never shows a blank box claiming success. */
   screenshotUnavailable?: string;
+  /** Per-capture telemetry (insitue#10 Phase 1). Populated on EVERY
+   *  capture — success and failure — so we can debug single bad
+   *  captures in isolation AND aggregate to find the patterns driving
+   *  the "sometimes blank" reports. None of this is shown to end users
+   *  by default; admins see it in the report detail view. */
+  captureDiagnostics?: CaptureDiagnostics;
   viewport: { w: number; h: number; dpr: number; breakpoint?: string };
   runtime: {
     url: string;

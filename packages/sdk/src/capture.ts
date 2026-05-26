@@ -126,6 +126,10 @@ async function renderViewportCrop(
    *  e.g. a small element inside a solid-background section, and a
    *  uniform thumbnail beats no thumbnail). */
   looksBlank: boolean;
+  /** 0..1 — fraction of the sample grid hitting the most-common
+   *  pixel. 1.0 = `looksBlank: true`. Threaded through to
+   *  `captureDiagnostics.shippedBlankScore` (insitue#10). */
+  blankScore: number;
   failedImages: Set<HTMLImageElement>;
 }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
@@ -142,7 +146,13 @@ async function renderViewportCrop(
   out.width = Math.max(1, Math.round(cropRect.width * pixelRatio));
   out.height = Math.max(1, Math.round(cropRect.height * pixelRatio));
   const ctx = out.getContext("2d");
-  if (!ctx) return { dataUrl: null, looksBlank: false, failedImages };
+  if (!ctx)
+    return {
+      dataUrl: null,
+      looksBlank: false,
+      blankScore: 0,
+      failedImages,
+    };
 
   // 1. html-to-image renders the document. For
   //    absolutely-positioned <img>s (the next/image fill pattern)
@@ -207,9 +217,18 @@ async function renderViewportCrop(
   // collected via the `failedImages` set, which `assessCaptureQuality`
   // reads after the rasterise.
 
-  const looksBlank = looksBlankUniform(ctx, out.width, out.height);
+  const { looksBlank, blankScore } = looksBlankUniform(
+    ctx,
+    out.width,
+    out.height,
+  );
   detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
-  return { dataUrl: out.toDataURL("image/png"), looksBlank, failedImages };
+  return {
+    dataUrl: out.toDataURL("image/png"),
+    looksBlank,
+    blankScore,
+    failedImages,
+  };
 }
 
 /** Walk every absolutely-positioned `<img>` whose bbox overlaps
@@ -478,17 +497,25 @@ function detectUnrenderedImages(
   }
 }
 
-/** Cheap blank-detection — sample 16 evenly spaced pixels; if they're
- *  all bytewise identical, the canvas is almost certainly a single-
- *  colour rectangle (silent rasterise failure). One-colour real UI
- *  is rare enough that a false positive here just escalates to the
- *  pixel-perfect path — not a regression. */
+/** Cheap blank-detection — sample 16 evenly spaced pixels.
+ *
+ *  `looksBlank` is the single-color verdict (every sampled pixel
+ *  bytewise identical). One-color real UI is rare enough that a
+ *  false positive here just escalates to the pixel-perfect path
+ *  (or shows a qualityNote) — not a regression.
+ *
+ *  `blankScore` is the fraction of the sample grid that hit the
+ *  most-common color. 1.0 = total uniform (definitely blank);
+ *  0.0625 = every sample unique (16 samples = full variety).
+ *  Surfaced in `captureDiagnostics.shippedBlankScore` (insitue#10)
+ *  for aggregate analysis: a hard `looksBlank` threshold might miss
+ *  near-blank cases, but `score > 0.9` is a useful warning signal. */
 function looksBlankUniform(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
-): boolean {
-  if (w < 4 || h < 4) return false;
+): { looksBlank: boolean; blankScore: number } {
+  if (w < 4 || h < 4) return { looksBlank: false, blankScore: 0 };
   const samples: string[] = [];
   for (let i = 0; i < 4; i++) {
     for (let j = 0; j < 4; j++) {
@@ -500,11 +527,18 @@ function looksBlankUniform(
       } catch {
         // Tainted canvas (shouldn't happen with our embed path —
         // but if it does, treat as opaque-blank, escalate).
-        return true;
+        return { looksBlank: true, blankScore: 1 };
       }
     }
   }
-  return new Set(samples).size === 1;
+  // Score = max-bucket count / total samples. 1 = all same color.
+  const counts = new Map<string, number>();
+  for (const s of samples) counts.set(s, (counts.get(s) ?? 0) + 1);
+  const maxBucket = Math.max(...counts.values());
+  return {
+    looksBlank: counts.size === 1,
+    blankScore: maxBucket / samples.length,
+  };
 }
 
 interface QualityAssessment {
@@ -559,6 +593,79 @@ function assessCaptureQuality(
     } else if (el instanceof HTMLCanvasElement) {
       if (r.width > 0 && r.height > 0) out.hasCanvas = true;
     }
+  }
+  return out;
+}
+
+/** Content-type tripwires inside the crop region (insitue#10).
+ *  Separate from `assessCaptureQuality` because that one drives the
+ *  layer-2 escalation decision; THIS one is pure telemetry for the
+ *  `captureDiagnostics` field. Includes `iframe` (which assessment
+ *  ignores — we can't capture across an origin boundary anyway) and
+ *  Shadow DOM depth (which silently makes html-to-image miss children). */
+interface CropContent {
+  hasVideo: boolean;
+  hasCanvas: boolean;
+  hasIframe: boolean;
+  shadowDomDepth: number;
+}
+function inspectCropContent(cropRect: DOMRect): CropContent {
+  const out: CropContent = {
+    hasVideo: false,
+    hasCanvas: false,
+    hasIframe: false,
+    shadowDomDepth: 0,
+  };
+  const overlaps = (r: DOMRect) =>
+    r.right >= cropRect.x &&
+    r.left <= cropRect.x + cropRect.width &&
+    r.bottom >= cropRect.y &&
+    r.top <= cropRect.y + cropRect.height &&
+    r.width > 0 &&
+    r.height > 0;
+  const all = document.querySelectorAll("video, canvas, iframe");
+  for (const el of all) {
+    if (
+      el instanceof Element &&
+      el.closest?.("#insitue-root, [data-insitue-layer]")
+    ) {
+      continue;
+    }
+    if (!overlaps(el.getBoundingClientRect())) continue;
+    if (el instanceof HTMLVideoElement) out.hasVideo = true;
+    else if (el instanceof HTMLCanvasElement) out.hasCanvas = true;
+    else if (el instanceof HTMLIFrameElement) out.hasIframe = true;
+  }
+  // Shadow DOM depth: walk down from the cropped region's elements,
+  // descend into shadowRoots, track the deepest open one.
+  // Closed shadowRoots are invisible to JS — we accept that gap.
+  function depthAt(node: Element, current = 0): number {
+    let max = current;
+    const root = (node as Element & { shadowRoot?: ShadowRoot | null })
+      .shadowRoot;
+    if (root) {
+      max = Math.max(max, current + 1);
+      for (const c of Array.from(root.children)) {
+        max = Math.max(max, depthAt(c, current + 1));
+      }
+    }
+    for (const c of Array.from(node.children)) {
+      max = Math.max(max, depthAt(c, current));
+    }
+    return max;
+  }
+  // Sample a few elements inside the crop rather than walking the
+  // whole document — at the corners and center.
+  const samplePoints = [
+    [cropRect.x + 4, cropRect.y + 4],
+    [cropRect.x + cropRect.width - 4, cropRect.y + 4],
+    [cropRect.x + 4, cropRect.y + cropRect.height - 4],
+    [cropRect.x + cropRect.width - 4, cropRect.y + cropRect.height - 4],
+    [cropRect.x + cropRect.width / 2, cropRect.y + cropRect.height / 2],
+  ];
+  for (const [x, y] of samplePoints) {
+    const els = document.elementsFromPoint(x!, y!);
+    if (els[0]) out.shadowDomDepth = Math.max(out.shadowDomDepth, depthAt(els[0]));
   }
   return out;
 }
@@ -727,6 +834,13 @@ interface DisplayMediaGrab {
   dataUrl: string;
   /** True if the stream was just granted in this call (vs cached). */
   fresh: boolean;
+  /** Post-capture blank verdict — `getDisplayMedia` can return all-
+   *  black under certain browser/OS conditions (Chrome on macOS
+   *  Sonoma had a known case). Threaded through so the layer-2
+   *  attempt outcome can be `"blank"` instead of false-positive
+   *  `"success"`. */
+  looksBlank: boolean;
+  blankScore: number;
 }
 
 /** Grab a single frame from the tab-capture stream and crop to
@@ -790,7 +904,17 @@ async function tryGrabViaDisplayMedia(
     if (!ctx) return null;
     ctx.drawImage(bitmap, sx, sy, sw, sh, 0, 0, out.width, out.height);
     bitmap.close?.();
-    return { dataUrl: out.toDataURL("image/png"), fresh };
+    const { looksBlank, blankScore } = looksBlankUniform(
+      ctx,
+      out.width,
+      out.height,
+    );
+    return {
+      dataUrl: out.toDataURL("image/png"),
+      fresh,
+      looksBlank,
+      blankScore,
+    };
   } finally {
     restoreOverlay();
   }
@@ -859,6 +983,9 @@ export async function buildBundle(
 
   let screenshot: CaptureBundle["screenshot"];
   let screenshotUnavailable: string | undefined;
+  let captureDiagnostics:
+    | import("@insitue/capture-core").CaptureDiagnostics
+    | undefined;
 
   // SVGElement gets the same path — without this, picking an SVG
   // node (e.g. an icon's <g>) silently produced a bundle with
@@ -913,6 +1040,18 @@ export async function buildBundle(
     el.style.outline = "3px solid #ff6b00";
     el.style.outlineOffset = "2px";
 
+    // Per-layer attempt log (insitue#10) — every layer's outcome is
+    // recorded for the diagnostics field, regardless of which one
+    // ended up shipping. `attempts.find(a => a.layer === N)` reads
+    // back like a slot.
+    const attempts: import("@insitue/capture-core").CaptureLayerAttempt[] = [];
+    const cropContent = inspectCropContent(cropRect);
+    const elementBboxRaw = pickedRect;
+    const pixelRatioUsed = Math.min(dpr, 1.5);
+    let shippedBlankScore: number | undefined;
+    let shippedLooksBlank = false;
+    let failedImagesCount = 0;
+
     try {
       // 3. Decide which path to try first.
       //    - alwaysPixelPerfect setting → skip layer 1, go straight
@@ -923,13 +1062,39 @@ export async function buildBundle(
 
       let layer1Result: string | null = null;
       let layer1LooksBlank = false;
+      let layer1BlankScore = 0;
       let quality: QualityAssessment | null = null;
 
       if (!skipLayer1) {
-        const r = await renderViewportCrop(cropRect, Math.min(dpr, 1.5));
-        layer1Result = r.dataUrl;
-        layer1LooksBlank = r.looksBlank;
-        quality = assessCaptureQuality(cropRect, r.failedImages);
+        const t0 = performance.now();
+        try {
+          const r = await renderViewportCrop(cropRect, pixelRatioUsed);
+          const dur = performance.now() - t0;
+          layer1Result = r.dataUrl;
+          layer1LooksBlank = r.looksBlank;
+          layer1BlankScore = r.blankScore;
+          failedImagesCount = r.failedImages.size;
+          quality = assessCaptureQuality(cropRect, r.failedImages);
+          attempts.push({
+            layer: 1,
+            outcome: !r.dataUrl
+              ? "error"
+              : r.looksBlank
+                ? "blank"
+                : "success",
+            durationMs: Math.round(dur),
+            ...(!r.dataUrl ? { error: "renderViewportCrop returned null" } : {}),
+          });
+        } catch (e) {
+          attempts.push({
+            layer: 1,
+            outcome: "error",
+            durationMs: Math.round(performance.now() - t0),
+            error: (e as Error).message,
+          });
+        }
+      } else {
+        attempts.push({ layer: 1, outcome: "skipped", durationMs: 0 });
       }
 
       const imperfect =
@@ -948,11 +1113,30 @@ export async function buildBundle(
 
       if ((imperfect || skipLayer1) && allowLayer2) {
         // 4. Layer 2 — try `getDisplayMedia` for a pixel-perfect grab.
-        const grab = await tryGrabViaDisplayMedia(
-          cropRect,
-          Math.min(dpr, 2),
-        );
-        if (grab) {
+        const t0 = performance.now();
+        let grab: DisplayMediaGrab | null = null;
+        try {
+          grab = await tryGrabViaDisplayMedia(cropRect, Math.min(dpr, 2));
+          const dur = performance.now() - t0;
+          attempts.push({
+            layer: 2,
+            outcome: !grab
+              ? "error"
+              : grab.looksBlank
+                ? "blank"
+                : "success",
+            durationMs: Math.round(dur),
+            ...(!grab ? { error: "getDisplayMedia returned null" } : {}),
+          });
+        } catch (e) {
+          attempts.push({
+            layer: 2,
+            outcome: "error",
+            durationMs: Math.round(performance.now() - t0),
+            error: (e as Error).message,
+          });
+        }
+        if (grab && !grab.looksBlank) {
           screenshot = {
             mime: "image/png",
             dataUrl: grab.dataUrl,
@@ -964,12 +1148,20 @@ export async function buildBundle(
             },
             source: "display-media",
           };
+          shippedBlankScore = grab.blankScore;
+          shippedLooksBlank = false;
         } else if (layer1Result) {
           // 5. Layer 3 — graceful degrade. Ship layer-1 result with
           // an honest qualityNote so the dashboard can surface it.
+          // If layer-1 also looks blank, escalate the note rather
+          // than silently shipping a blank thumbnail (insitue#10 fix).
           const reason = quality
             ? describeImperfection(quality)
             : "non-CORS content";
+          const baseNote = `${reason} couldn't be embedded — grant tab capture for pixel-perfect screenshots`;
+          const blankNote = layer1LooksBlank
+            ? "captured image looks blank — likely an embed failure; grant tab capture for pixel-perfect screenshots"
+            : null;
           screenshot = {
             mime: "image/png",
             dataUrl: layer1Result,
@@ -980,8 +1172,10 @@ export async function buildBundle(
               height: cropRect.height,
             },
             source: "rasterise",
-            qualityNote: `${reason} couldn't be embedded — grant tab capture for pixel-perfect screenshots`,
+            qualityNote: blankNote ?? baseNote,
           };
+          shippedBlankScore = layer1BlankScore;
+          shippedLooksBlank = layer1LooksBlank;
         } else if (skipLayer1) {
           // Rasterise was deliberately skipped (alwaysPixelPerfect),
           // so the only failure mode here is the user declining the
@@ -1000,6 +1194,9 @@ export async function buildBundle(
         }
       } else if (layer1Result) {
         // Layer 1 was clean — ship it, no escalation needed.
+        // BUT if it looksBlank, surface that even when layer-2 is
+        // disabled (dev/companion path). Better an honest qualityNote
+        // than a silent blank thumbnail (insitue#10 fix).
         screenshot = {
           mime: "image/png",
           dataUrl: layer1Result,
@@ -1010,9 +1207,24 @@ export async function buildBundle(
             height: cropRect.height,
           },
           source: "rasterise",
+          ...(layer1LooksBlank
+            ? {
+                qualityNote:
+                  "captured image looks blank — embed step may have dropped the picked element; enable pixel-perfect in the gear to retry with tab capture",
+              }
+            : {}),
         };
+        shippedBlankScore = layer1BlankScore;
+        shippedLooksBlank = layer1LooksBlank;
       } else {
         screenshotUnavailable = "rasterise produced an empty image";
+      }
+
+      // Mark layers that were never considered as `skipped`. After
+      // the dispatch above, exactly one of {1, 2} may still be
+      // missing from `attempts`.
+      if (!attempts.some((a) => a.layer === 2)) {
+        attempts.push({ layer: 2, outcome: "skipped", durationMs: 0 });
       }
     } catch (err) {
       // Last-ditch — if something completely unexpected happened,
@@ -1026,6 +1238,70 @@ export async function buildBundle(
       el.style.outline = orig.outline;
       el.style.outlineOffset = orig.outlineOffset;
     }
+
+    // Build the diagnostics record — runs whether the screenshot
+    // landed or not. Strategy field is derived from which attempts
+    // were recorded as success/blank (insitue#10).
+    const succeeded = attempts.filter((a) => a.outcome === "success");
+    const blanked = attempts.filter((a) => a.outcome === "blank");
+    let strategy: import("@insitue/capture-core").CaptureDiagnostics["strategy"];
+    const l1 = attempts.find((a) => a.layer === 1);
+    const l2 = attempts.find((a) => a.layer === 2);
+    if (
+      l1 &&
+      ["success", "blank"].includes(l1.outcome) &&
+      l2?.outcome === "skipped"
+    ) {
+      strategy = "layer1-only";
+    } else if (
+      l2 &&
+      ["success", "blank"].includes(l2.outcome) &&
+      l1?.outcome === "skipped"
+    ) {
+      strategy = "layer2-only";
+    } else if (succeeded.some((a) => a.layer === 2)) {
+      strategy = "layer1-then-layer2";
+    } else if (
+      blanked.some((a) => a.layer === 2) &&
+      succeeded.some((a) => a.layer === 1)
+    ) {
+      strategy = "layer1-degraded";
+    } else if (succeeded.length === 0) {
+      strategy = "both-failed";
+    } else {
+      strategy = "layer1-only";
+    }
+    captureDiagnostics = {
+      strategy,
+      attemptedLayers: attempts,
+      shippedLooksBlank,
+      ...(shippedBlankScore !== undefined ? { shippedBlankScore } : {}),
+      cropRect: {
+        x: Math.round(cropRect.x),
+        y: Math.round(cropRect.y),
+        width: Math.round(cropRect.width),
+        height: Math.round(cropRect.height),
+        outsideViewport:
+          cropRect.x < 0 ||
+          cropRect.y < 0 ||
+          cropRect.x + cropRect.width > window.innerWidth ||
+          cropRect.y + cropRect.height > window.innerHeight,
+      },
+      elementBbox: {
+        x: Math.round(elementBboxRaw.x),
+        y: Math.round(elementBboxRaw.y),
+        width: Math.round(elementBboxRaw.width),
+        height: Math.round(elementBboxRaw.height),
+      },
+      pixelRatioUsed,
+      layer1FailedImages: failedImagesCount,
+      hasVideoInCrop: cropContent.hasVideo,
+      hasCanvasInCrop: cropContent.hasCanvas,
+      hasIframeInCrop: cropContent.hasIframe,
+      shadowDomDepthInCrop: cropContent.shadowDomDepth,
+      browserUA:
+        typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 240) : "",
+    };
   }
 
   return {
@@ -1058,6 +1334,7 @@ export async function buildBundle(
               : "no element selected",
           }
         : {}),
+    ...(captureDiagnostics ? { captureDiagnostics } : {}),
     viewport: {
       w: window.innerWidth,
       h: window.innerHeight,
