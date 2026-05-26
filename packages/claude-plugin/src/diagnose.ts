@@ -2,8 +2,16 @@
  * Health check the MCP exposes as a tool AND the setup CLI runs
  * after writing the Desktop config. One source of truth for
  * "is everything wired up correctly?"
+ *
+ * Workspace-aware (#32): when `projectDir` is a pnpm/yarn workspace
+ * root, the SDK and SWC-plugin are typically installed in per-
+ * workspace `node_modules/` (`apps/dashboard/node_modules/...`),
+ * not the root. The pre-#32 implementation only checked the root and
+ * reported false-positive "not installed" warnings against the
+ * monorepo of every dogfooder. Detection now walks one level into
+ * common workspace patterns (`apps/*`, `packages/*`) before giving up.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { join } from "node:path";
 import type { ResolvedProjectDir } from "./project-dir.js";
@@ -33,11 +41,8 @@ export interface DiagnosticReport {
   recommendations: string[];
 }
 
-function readPkgVersion(
-  projectDir: string,
-  pkgName: string,
-): string | null {
-  const pkgJson = join(projectDir, "node_modules", pkgName, "package.json");
+function readPkgVersionAt(dir: string, pkgName: string): string | null {
+  const pkgJson = join(dir, "node_modules", pkgName, "package.json");
   if (!existsSync(pkgJson)) return null;
   try {
     return (JSON.parse(readFileSync(pkgJson, "utf8")) as { version?: string })
@@ -45,6 +50,52 @@ function readPkgVersion(
   } catch {
     return null;
   }
+}
+
+/** Immediate children of a workspace dir (e.g. `apps/`, `packages/`)
+ *  that have their own `package.json`. Returns absolute paths.
+ *  Bounded to one level — covers the common monorepo layout without
+ *  walking arbitrarily deep. */
+function listWorkspaceMembers(projectDir: string): string[] {
+  const out: string[] = [];
+  for (const parent of ["apps", "packages"]) {
+    const parentDir = join(projectDir, parent);
+    if (!existsSync(parentDir)) continue;
+    let entries: string[];
+    try {
+      entries = readdirSync(parentDir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      const child = join(parentDir, name);
+      try {
+        if (
+          statSync(child).isDirectory() &&
+          existsSync(join(child, "package.json"))
+        ) {
+          out.push(child);
+        }
+      } catch {
+        // ignore unreadable entries
+      }
+    }
+  }
+  return out;
+}
+
+/** Resolved version of `pkgName` from the first place it's installed
+ *  across the project dir and its workspace members. Returns null
+ *  when not found anywhere — matches the pre-#32 contract for the
+ *  non-monorepo case. */
+function readPkgVersion(projectDir: string, pkgName: string): string | null {
+  const v = readPkgVersionAt(projectDir, pkgName);
+  if (v) return v;
+  for (const ws of listWorkspaceMembers(projectDir)) {
+    const v2 = readPkgVersionAt(ws, pkgName);
+    if (v2) return v2;
+  }
+  return null;
 }
 
 interface SessionFile {
@@ -94,15 +145,17 @@ async function pokeCompanion(
   });
 }
 
-function detectSwcPluginConfigured(projectDir: string): boolean | null {
-  for (const f of [
-    "next.config.mjs",
-    "next.config.js",
-    "next.config.ts",
-    "vite.config.ts",
-    "vite.config.js",
-  ]) {
-    const p = join(projectDir, f);
+const FRAMEWORK_CONFIGS = [
+  "next.config.mjs",
+  "next.config.js",
+  "next.config.ts",
+  "vite.config.ts",
+  "vite.config.js",
+];
+
+function detectSwcPluginConfiguredAt(dir: string): boolean | null {
+  for (const f of FRAMEWORK_CONFIGS) {
+    const p = join(dir, f);
     if (existsSync(p)) {
       try {
         const c = readFileSync(p, "utf8");
@@ -113,6 +166,24 @@ function detectSwcPluginConfigured(projectDir: string): boolean | null {
     }
   }
   return null;
+}
+
+/** Workspace-aware variant. Returns true if ANY discovered config
+ *  has the plugin wired; false if at least one config was found and
+ *  none referenced the plugin; null if no config files exist at all
+ *  (genuine "can't tell" — projectDir is bare or a non-framework
+ *  package). */
+function detectSwcPluginConfigured(projectDir: string): boolean | null {
+  let foundAnyConfig = false;
+  const direct = detectSwcPluginConfiguredAt(projectDir);
+  if (direct === true) return true;
+  if (direct === false) foundAnyConfig = true;
+  for (const ws of listWorkspaceMembers(projectDir)) {
+    const r = detectSwcPluginConfiguredAt(ws);
+    if (r === true) return true;
+    if (r === false) foundAnyConfig = true;
+  }
+  return foundAnyConfig ? false : null;
 }
 
 export async function diagnose(

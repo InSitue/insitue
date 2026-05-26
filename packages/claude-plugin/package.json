@@ -36,11 +36,12 @@
     "insitue-claude-plugin": "./dist/dispatcher.js"
   },
   "scripts": {
-    "build": "tsup src/dispatcher.ts src/mcp-server.ts src/setup-cli.ts --format esm --clean --external @modelcontextprotocol/sdk --external ws --external zod",
-    "dev": "tsup src/dispatcher.ts src/mcp-server.ts src/setup-cli.ts --format esm --watch --external @modelcontextprotocol/sdk --external ws --external zod",
+    "build": "tsup src/dispatcher.ts src/mcp-server.ts src/setup-cli.ts src/diagnose.ts --format esm --clean --external @modelcontextprotocol/sdk --external ws --external zod",
+    "dev": "tsup src/dispatcher.ts src/mcp-server.ts src/setup-cli.ts src/diagnose.ts --format esm --watch --external @modelcontextprotocol/sdk --external ws --external zod",
+    "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "pnpm build"
+    "prepublishOnly": "pnpm build && pnpm test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
