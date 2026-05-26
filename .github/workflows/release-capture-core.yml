@@ -1,0 +1,93 @@
+name: release-capture-core
+
+# Publishes @insitue/capture-core to npm when
+# packages/capture-core/package.json version changes on main. Mirrors
+# release-sdk.yml — bump version + commit + merge, CI does the rest.
+#
+# Required GitHub repo secrets:
+#   NPM_TOKEN — granular access token from npmjs.com,
+#               scoped to @insitue/* with Read + write.
+#
+# Why this exists: capture-core owns CAPTURE_SCHEMA_VERSION, which
+# the cloud's ingest gate pins to {current, current-1}. Bumping the
+# schema requires publishing capture-core BEFORE bumping the SDK, so
+# the cloud receivers can upgrade their accept set first.
+
+on:
+  push:
+    branches: [main]
+    paths: ["packages/capture-core/**"]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+# npm provenance signs the package with this run's GitHub OIDC token.
+permissions:
+  contents: write
+  id-token: write
+
+concurrency:
+  group: release-capture-core
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Check whether capture-core version changed
+        id: check
+        run: |
+          set -euo pipefail
+          CURR=$(jq -r .version packages/capture-core/package.json)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+            echo "Dispatch — attempting publish of $CURR"
+            exit 0
+          fi
+          PREV=$(git show HEAD~1:packages/capture-core/package.json 2>/dev/null | jq -r .version || echo "none")
+          echo "previous=$PREV  current=$CURR"
+          if [ "$PREV" != "$CURR" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=$CURR" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Version unchanged — skipping publish."
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build capture-core
+        if: steps.check.outputs.publish == 'true'
+        run: pnpm turbo run build --filter=@insitue/capture-core
+
+      - name: Publish to npm with provenance
+        if: steps.check.outputs.publish == 'true'
+        run: |
+          cd packages/capture-core
+          pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Tag the release commit
+        if: steps.check.outputs.publish == 'true' && github.event_name == 'push'
+        run: |
+          TAG="capture-core-v${{ steps.check.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"
