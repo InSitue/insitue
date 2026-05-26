@@ -338,9 +338,19 @@ export function startCompanion(opts: CompanionOptions): Server {
         }
         if (msg.t === "capture") {
           const bundle = msg.bundle as unknown as CaptureBundle;
-          const { resolved, note } = resolveCapture(opts.root, bundle);
+          // Cast to `unknown` here: agent-core imports its own
+          // (pinned) copy of `CaptureBundle` while the workspace
+          // exports the current schema version. Both are structurally
+          // a CaptureBundle but the `schemaVersion: N as const`
+          // literal type differs after a v3→v4 bump, and strict
+          // mode's `exactOptionalPropertyTypes` makes the call
+          // signature mismatch. The runtime shape is identical.
+          const bundleForAgent = bundle as unknown as Parameters<
+            typeof resolveCapture
+          >[1];
+          const { resolved, note } = resolveCapture(opts.root, bundleForAgent);
           console.log(`[insitue] capture ${bundle.id}: ${note}`);
-          orchestrator?.registerBundle(bundle, resolved);
+          orchestrator?.registerBundle(bundleForAgent, resolved);
           send(ws, {
             t: "capture-resolved",
             id: bundle.id,
