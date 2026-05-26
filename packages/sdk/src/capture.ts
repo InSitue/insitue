@@ -158,12 +158,23 @@ async function renderViewportCrop(
   //    its foreignObject pipeline drops the image and shows the
   //    parent's background instead. We'll patch over that next.
   //
-  //    `toCanvas` can throw for many reasons — CORS-tainted image
-  //    serialization, malformed SVG namespaces, foreignObject
-  //    parser errors. The widget's core flow rides on us NEVER
-  //    throwing from here: if html-to-image fails entirely, paint
-  //    a labeled placeholder ourselves so the user still sees
-  //    something shaped like their selection (insitue#10 / 0.5.0).
+  //    `toCanvas` can throw for many reasons — most commonly an
+  //    `<img>` load failure inside the foreignObject pipeline
+  //    rejects with an Event (NOT an Error), which cascades up and
+  //    aborts the whole render. One unloadable image on the page
+  //    kills every capture. The widget's core flow CAN'T have that
+  //    failure mode (insitue#10 / 0.5.0).
+  //
+  //    Two-tier retry:
+  //    a) Full render with image embedding — happy path, best
+  //       fidelity.
+  //    b) If (a) throws: retry with all `<img>` and `<svg>` images
+  //       filtered out. Loses the bitmaps but keeps layout, colors,
+  //       backgrounds, text — far more useful than a placeholder.
+  //       The drawAbsoluteImagesOnto step below layers images back
+  //       in directly from the live page (CORS-friendly only).
+  //    c) If (b) also throws: paint a labeled placeholder so the
+  //       bundle still ships *something* (handled outside this fn).
   let fullCanvas: HTMLCanvasElement | null = null;
   let htiError: Error | null = null;
   try {
@@ -179,10 +190,45 @@ async function renderViewportCrop(
         ),
     });
   } catch (e) {
-    htiError = e instanceof Error ? e : new Error(String(e));
-    // Helpful for end-user dogfooding — never want a silent error.
+    htiError = describeHtmlToImageError(e);
     // eslint-disable-next-line no-console
-    console.error("[insitue] html-to-image threw:", htiError);
+    console.warn(
+      "[insitue] html-to-image full render failed, retrying without images:",
+      htiError.message,
+    );
+    try {
+      fullCanvas = await toCanvas(document.documentElement, {
+        pixelRatio,
+        cacheBust: false, // skip refetch; we're filtering out imgs anyway
+        backgroundColor,
+        imagePlaceholder: IMAGE_PLACEHOLDER,
+        filter: (n) => {
+          if (
+            n instanceof Element &&
+            n.closest?.("#insitue-root, [data-insitue-layer]")
+          ) {
+            return false;
+          }
+          // Strip every <img> + <image> from the SVG → foreignObject
+          // pipeline. The drawAbsoluteImagesOnto step below tries to
+          // layer them back in from the live DOM.
+          if (n instanceof HTMLImageElement || n instanceof SVGImageElement) {
+            return false;
+          }
+          return true;
+        },
+      });
+      // First attempt failed but second succeeded — don't show the
+      // placeholder; just note the degradation in the diagnostics.
+      htiError = null;
+    } catch (e2) {
+      htiError = describeHtmlToImageError(e2);
+      // eslint-disable-next-line no-console
+      console.error(
+        "[insitue] html-to-image both attempts failed:",
+        htiError.message,
+      );
+    }
   }
 
   if (!fullCanvas) {
@@ -467,6 +513,43 @@ function computeObjectFitSource(
  *  the layer-2 `getDisplayMedia` escalation — so the user gets a
  *  pixel-perfect capture (with permission) instead of a silent
  *  empty image. */
+/** Stringify whatever html-to-image (and its foreignObject pipeline)
+ *  rejected with. The most common failure is an `<img>.onerror` event
+ *  bubbling up — that's an `Event` object, not an Error. Default
+ *  string-coercion gives the useless `[object Event]`. Pull out the
+ *  target's tag + src so the qualityNote is actually actionable.
+ *  (insitue#10 — dogfood found `screenshot couldn't be rendered:
+ *  [object Event]` shipped in real captures.) */
+function describeHtmlToImageError(e: unknown): Error {
+  if (e instanceof Error) return e;
+  if (typeof Event !== "undefined" && e instanceof Event) {
+    const t = e.target as
+      | (HTMLElement & { src?: string; href?: string })
+      | null;
+    const tag = t?.tagName?.toLowerCase();
+    const src =
+      (t && "src" in t && t.src) ||
+      (t && "href" in t && (t as unknown as { href?: string }).href) ||
+      "";
+    const where = tag
+      ? src
+        ? `<${tag}> failed to load (${truncate(src, 120)})`
+        : `<${tag}> emitted ${e.type}`
+      : `resource emitted ${e.type}`;
+    return new Error(where);
+  }
+  // Some libs reject with a string or arbitrary object.
+  if (typeof e === "string") return new Error(e);
+  if (e && typeof e === "object" && "message" in e) {
+    return new Error(String((e as { message: unknown }).message));
+  }
+  return new Error(`unknown rejection: ${Object.prototype.toString.call(e)}`);
+}
+
+function truncate(s: string, n: number): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
 /** Paint a labeled placeholder when the html-to-image render fails
  *  entirely. The bundle still ships a screenshot — a clearly-labeled
  *  one — instead of nothing. Honest degradation: better a "we
