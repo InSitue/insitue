@@ -1,6 +1,6 @@
 {
   "name": "@insitue/sdk",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "description": "InSitue capture SDK — drop one snippet into your deployed app; your users point at a bug, InSitue opens a verified pull request.",
   "license": "MIT",
   "type": "module",
