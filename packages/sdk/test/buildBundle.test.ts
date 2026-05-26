@@ -36,7 +36,7 @@ describe("buildBundle — structural contract", () => {
     const hasResult = !!bundle.screenshot || !!bundle.screenshotUnavailable;
     expect(hasResult).toBe(true);
     // Schema sanity — the cloud receiver pins these.
-    expect(bundle.schemaVersion).toBe(3);
+    expect(bundle.schemaVersion).toBe(4);
     expect(bundle.target).not.toBeNull();
   });
 
