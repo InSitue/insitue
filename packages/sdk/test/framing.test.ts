@@ -18,6 +18,7 @@ import {
   transformedAncestorFixture,
   innerScrollFixture,
   layoutShiftFixture,
+  tileInWideGridFixture,
   type Fixture,
 } from "./_fixtures.ts";
 
@@ -83,6 +84,22 @@ describe("framing — pickedContainingBlock surfaces scrolling + transformed anc
     expect(d.pickedContainingBlock).not.toBeNull();
     expect(d.pickedContainingBlock?.scrollTop).toBeGreaterThan(0);
     expectCropContainsPickedBbox(d.cropRect, d.pickedBboxAtComposite!);
+  });
+});
+
+describe("crop tightness — picked element drives the crop size", () => {
+  it("does NOT expand to the surrounding grid's full width", async () => {
+    active = tileInWideGridFixture();
+    const bundle = await buildBundle(active.selection);
+    const d = bundle.captureDiagnostics!;
+    const tileWidth = d.elementBbox.width;
+    // The grid container is 1100px - 48px padding = ~1052px wide.
+    // Before the fix, cropRect.width tracked the grid (~1052). Now
+    // it should stay tight to the tile: capped near the 640px
+    // TARGET, never approaching the grid's full width.
+    expect(d.cropRect.width).toBeLessThan(900);
+    // And the crop must still surround the picked tile.
+    expect(d.cropRect.width).toBeGreaterThanOrEqual(tileWidth);
   });
 });
 
