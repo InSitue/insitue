@@ -1355,27 +1355,34 @@ export async function buildBundle(
     //
     //    The fix: only the ancestor's SIZE informs the crop —
     //    "enough surrounding pixels to recognise the area" — and we
-    //    always center on the picked element. The outline already
-    //    applied at line ~887 then highlights the exact selection
-    //    inside the rendered thumbnail.
+    //    always center on the picked element. The orange outline
+    //    rasterises into the screenshot below, so reviewers can
+    //    always pinpoint the selection inside the thumbnail.
+    //
+    //    Sub-fix (0.6.1): the *ancestor*'s bbox was being used as
+    //    a HARD floor for the crop size — `max(MIN, ancestor,
+    //    picked)`. For a tile in a 3-col grid, the ancestor is the
+    //    whole grid, so the crop ended up section-sized. Now we
+    //    use a fixed TARGET that's a comfortable thumbnail (640 ×
+    //    420), expand if the picked element exceeds it (full-width
+    //    hero band, tall image), and cap at viewport.
     const pickedRect = el.getBoundingClientRect();
-    const context = findContextAncestor(el);
-    const ar = context.getBoundingClientRect();
 
     // Framing inspection — drives composite math (fixed-chain skip
     // scrollY) and surfaces diagnostics so "the crop missed the
     // element" bugs are debuggable from the bundle alone.
     const framing = inspectPickedFraming(el);
 
-    const MIN_W = 420;
-    const MIN_H = 140;
+    const TARGET_W = 640;
+    const TARGET_H = 420;
+    const MARGIN = 48;
     const cropW = Math.min(
       window.innerWidth,
-      Math.max(MIN_W, ar.width, pickedRect.width),
+      Math.max(TARGET_W, pickedRect.width + MARGIN * 2),
     );
     const cropH = Math.min(
       window.innerHeight,
-      Math.max(MIN_H, ar.height, pickedRect.height),
+      Math.max(TARGET_H, pickedRect.height + MARGIN * 2),
     );
     const pickedCx = pickedRect.x + pickedRect.width / 2;
     const pickedCy = pickedRect.y + pickedRect.height / 2;

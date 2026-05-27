@@ -205,6 +205,32 @@ export function nextImageHeroPick(): Fixture {
   };
 }
 
+/** Crop tightness — a single tile inside a wide 3-col grid. Before
+ *  0.6.1, `findContextAncestor` walked up to the grid and the crop
+ *  ended up grid-sized (the entire section). Now the crop is
+ *  anchored to the picked tile + margin, capped near a comfortable
+ *  thumbnail size — never section-sized. */
+export function tileInWideGridFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:1100px;background:#f7f7fb;padding:24px;color:#0a0a0a">
+      <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:24px">
+        <div style="background:#fff;border-radius:14px;padding:20px;min-height:240px">Tile 1</div>
+        <div
+          id="t-middle-tile"
+          style="background:#fff;border-radius:14px;padding:20px;min-height:240px"
+        >Tile 2 (picked)</div>
+        <div style="background:#fff;border-radius:14px;padding:20px;min-height:240px">Tile 3</div>
+      </div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLDivElement>("#t-middle-tile")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
 /** Framing — picked element is itself `position: fixed`. Asserts
  *  `captureDiagnostics.pickedPosition === "fixed"` so the composite
  *  step can skip `+scrollY`. */
