@@ -205,6 +205,136 @@ export function nextImageHeroPick(): Fixture {
   };
 }
 
+/** Framing — picked element is itself `position: fixed`. Asserts
+ *  `captureDiagnostics.pickedPosition === "fixed"` so the composite
+ *  step can skip `+scrollY`. */
+export function fixedTargetFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:600px;height:400px;background:#fff;padding:20px">
+      <div style="height:160px;background:#eee">In-flow placeholder</div>
+      <div
+        id="t-fixed-target"
+        style="position:fixed;top:220px;right:28px;width:220px;height:96px;background:#ef4444;color:#fff;display:flex;align-items:center;justify-content:center;font:700 18px sans-serif;z-index:50"
+      >FIXED · pick me</div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLDivElement>("#t-fixed-target")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
+/** Framing — `position: sticky` target. Whether the test forces it
+ *  into a stuck state depends on the test scrollY being set; the
+ *  fixture only guarantees `pickedPosition === "sticky"`. */
+export function stickyTargetFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:600px;height:400px;background:#fff;padding:20px">
+      <div style="height:600px;background:#fef3c7;padding:12px">
+        <div
+          id="t-sticky-target"
+          style="position:sticky;top:8px;background:#8b5cf6;color:#fff;display:flex;align-items:center;justify-content:center;min-height:96px;font:700 18px sans-serif"
+        >STUCK</div>
+        <div style="height:480px;background:repeating-linear-gradient(135deg,#fff 0 16px,#fde68a 16px 32px)"></div>
+      </div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLDivElement>("#t-sticky-target")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
+/** Framing — target inside a transformed ancestor (vs. having the
+ *  transform on the target itself). Asserts
+ *  `captureDiagnostics.pickedContainingBlock.transform` is set. */
+export function transformedAncestorFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:600px;height:400px;background:#fff;padding:20px">
+      <div
+        id="t-transform-wrap"
+        style="transform:translateY(-30px) scale(0.95);transform-origin:top left;padding:20px;border:1px dashed #d4d4dc"
+      >
+        <div
+          id="t-transformed-target"
+          style="background:#0ea5e9;color:#fff;display:flex;align-items:center;justify-content:center;min-height:120px;font:700 22px sans-serif"
+        >TRANSFORMED · ancestor</div>
+      </div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLDivElement>("#t-transformed-target")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
+/** Framing — target only visible after the inner scroll container
+ *  is scrolled. Asserts `pickedContainingBlock.scrollTop > 0`. */
+export function innerScrollFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:600px;height:400px;background:#fff;padding:20px">
+      <div
+        id="t-inner-scroller"
+        style="max-height:200px;overflow:auto;background:#f4f4f6;padding:12px"
+      >
+        <div style="height:220px;background:repeating-linear-gradient(45deg,#e4e4e7 0 10px,#f4f4f6 10px 20px)"></div>
+        <div
+          id="t-inner-target"
+          style="margin:16px 0;background:#22c55e;color:#fff;display:flex;align-items:center;justify-content:center;min-height:96px;font:700 22px sans-serif"
+        >INNER-SCROLL</div>
+        <div style="height:220px;background:repeating-linear-gradient(45deg,#e4e4e7 0 10px,#f4f4f6 10px 20px)"></div>
+      </div>
+    </div>
+  `);
+  const scroller = root.querySelector<HTMLDivElement>("#t-inner-scroller")!;
+  // Pre-scroll so `pickedContainingBlock.scrollTop > 0` at capture time.
+  scroller.scrollTop = 200;
+  const picked = root.querySelector<HTMLDivElement>("#t-inner-target")!;
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
+/** Framing — fires a layout shift on a sibling AFTER the picker
+ *  selects the target but BEFORE `buildBundle` reaches its composite
+ *  step. The shifted bbox at composite time differs from the click-
+ *  time bbox; asserts `pickedBboxDriftPx > 0`. */
+export function layoutShiftFixture(): Fixture {
+  const root = mount(`
+    <div style="position:relative;width:600px;height:400px;background:#fff;padding:20px">
+      <div
+        id="t-shifter"
+        style="height:0;background:linear-gradient(90deg,#f59e0b,#f97316);transition:none"
+      ></div>
+      <div
+        id="t-shift-target"
+        style="margin-top:12px;background:#db2777;color:#fff;display:flex;align-items:center;justify-content:center;min-height:96px;font:700 22px sans-serif"
+      >SHIFTS-AFTER-PICK</div>
+    </div>
+  `);
+  const picked = root.querySelector<HTMLDivElement>("#t-shift-target")!;
+  // Fire the shift right after the test calls buildBundle. We use a
+  // 0ms timeout so it queues immediately but lets the test's bbox
+  // capture happen first.
+  setTimeout(() => {
+    const shifter = root.querySelector<HTMLDivElement>("#t-shifter");
+    if (shifter) shifter.style.height = "120px";
+  }, 0);
+  return {
+    picked,
+    selection: pick(picked),
+    cleanup: () => root.remove(),
+  };
+}
+
 /** Picks a `<div>` that's the parent of nothing visible — the
  *  bundle should still ship with a `screenshot` or honest
  *  `screenshotUnavailable`, never both undefined. */
