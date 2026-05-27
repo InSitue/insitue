@@ -22,7 +22,8 @@
  *      denied, ship the layer-1 result with a `qualityNote` and
  *      surface a retry nudge in the overlay.
  */
-import { toCanvas } from "html-to-image";
+import { toCanvas as htiToCanvas } from "html-to-image";
+import { domToCanvas as msDomToCanvas } from "modern-screenshot";
 import {
   CAPTURE_SCHEMA_VERSION,
   breakpointFor,
@@ -35,6 +36,71 @@ import {
   type SelectionInput,
 } from "@insitue/capture-core";
 import { runtimeSnapshot } from "./runtime.js";
+
+/** Rasteriser dispatch. Default is `html-to-image` (the version
+ *  capture.ts has accumulated ~8 compensations against — known bug
+ *  list, predictable failure modes). `modern-screenshot` is an
+ *  active fork with a different bug profile.
+ *
+ *  Selection is evaluated PER CALL so the A/B harness can flip
+ *  `window.__INSITUE_RASTERISER__` between runs without rebuilding
+ *  the SDK. Build-time tree-shaking can be reintroduced once a
+ *  winner is chosen. */
+type RasteriserId = "html-to-image" | "modern-screenshot";
+
+function currentRasteriser(): RasteriserId {
+  if (
+    typeof window !== "undefined" &&
+    (window as unknown as { __INSITUE_RASTERISER__?: string })
+      .__INSITUE_RASTERISER__ === "modern-screenshot"
+  ) {
+    return "modern-screenshot";
+  }
+  if (
+    typeof process !== "undefined" &&
+    process.env &&
+    process.env.INSITUE_RASTERISER === "modern-screenshot"
+  ) {
+    return "modern-screenshot";
+  }
+  return "html-to-image";
+}
+
+/** Options accepted by both rasterisers. `cacheBust` is ours alone
+ *  (html-to-image-specific; modern-screenshot doesn't append cache
+ *  busters at all, which is what we want). `imagePlaceholder` only
+ *  has an effect on html-to-image; modern-screenshot has no
+ *  equivalent — broken images fall through to its internal handling. */
+interface RasteriseOptions {
+  pixelRatio: number;
+  cacheBust: boolean;
+  backgroundColor: string;
+  imagePlaceholder?: string;
+  filter: (n: Node) => boolean;
+}
+
+async function rasteriseDocument(
+  node: HTMLElement,
+  opts: RasteriseOptions,
+): Promise<HTMLCanvasElement> {
+  if (currentRasteriser() === "modern-screenshot") {
+    // Map options. `scale` ⇄ `pixelRatio` (modern-screenshot's docs:
+    // "DPI = 96 * scale"). The `filter` signature is identical. No
+    // imagePlaceholder equivalent — we accept that gap for the spike.
+    return await msDomToCanvas(node, {
+      scale: opts.pixelRatio,
+      backgroundColor: opts.backgroundColor,
+      filter: opts.filter,
+    });
+  }
+  return await htiToCanvas(node, {
+    pixelRatio: opts.pixelRatio,
+    cacheBust: opts.cacheBust,
+    backgroundColor: opts.backgroundColor,
+    imagePlaceholder: opts.imagePlaceholder,
+    filter: opts.filter,
+  });
+}
 
 /** Is `url` a cross-origin resource that would taint a canvas?
  *  data:/blob: and same-origin are safe; anything else is a risk. */
@@ -82,6 +148,110 @@ const IMAGE_PLACEHOLDER =
  *  produce a screenshot at all. */
 type RasterisableElement = HTMLElement | SVGElement;
 
+/** Framing diagnostics + composite hints for the picked element.
+ *  Computed once in `buildBundle`, threaded into `renderViewportCrop`
+ *  so the composite step knows whether `+ scrollY` is valid.
+ *
+ *  Why this matters: `getBoundingClientRect()` always returns viewport
+ *  coords. `toCanvas(document.body)` renders a full-document canvas
+ *  where most elements live at their document position (= viewport
+ *  position + page scroll). But `position: fixed` chains render at
+ *  their viewport position *in document space* — adding `scrollY`
+ *  to the composite source coords double-counts and the crop lands
+ *  on a totally different row. */
+interface PickedFraming {
+  position: string;
+  containingBlock:
+    | NonNullable<
+        import("@insitue/capture-core").CaptureDiagnostics["pickedContainingBlock"]
+      >
+    | null;
+  /** True iff the picked element or any of its ancestors up to body
+   *  has `position: fixed`. Drives the "don't add scrollY" branch in
+   *  the composite step. */
+  isInFixedChain: boolean;
+}
+
+function inspectPickedFraming(el: RasterisableElement): PickedFraming {
+  let position = "";
+  try {
+    position = getComputedStyle(el).position;
+  } catch {
+    /* getComputedStyle can throw on detached/SVG-orphan nodes */
+  }
+
+  let containingBlock: PickedFraming["containingBlock"] = null;
+  let isInFixedChain = position === "fixed";
+  let cur: Element | null = el as unknown as Element;
+  while (cur && cur !== document.documentElement) {
+    let cs: CSSStyleDeclaration | null = null;
+    try {
+      cs = getComputedStyle(cur);
+    } catch {
+      cur = cur.parentElement;
+      continue;
+    }
+    if (cs.position === "fixed") isInFixedChain = true;
+    if (cur !== el) {
+      const isScroller =
+        (cs.overflow === "auto" ||
+          cs.overflow === "scroll" ||
+          cs.overflowY === "auto" ||
+          cs.overflowY === "scroll" ||
+          cs.overflowX === "auto" ||
+          cs.overflowX === "scroll") &&
+        ((cur as HTMLElement).scrollTop > 0 ||
+          (cur as HTMLElement).scrollLeft > 0);
+      const hasTransform = cs.transform && cs.transform !== "none";
+      if (containingBlock === null && (isScroller || hasTransform)) {
+        let selector: string | undefined;
+        try {
+          selector = buildSelector(cur as HTMLElement);
+        } catch {
+          /* buildSelector is best-effort for diagnostics; absence is fine */
+        }
+        containingBlock = {
+          ...(selector ? { selector } : {}),
+          scrollTop: Math.round((cur as HTMLElement).scrollTop),
+          scrollLeft: Math.round((cur as HTMLElement).scrollLeft),
+          ...(hasTransform ? { transform: cs.transform } : {}),
+        };
+      }
+    }
+    cur = cur.parentElement;
+  }
+  return { position, containingBlock, isInFixedChain };
+}
+
+/** Dev-only visualization. Paints a 1px magenta rectangle on the
+ *  output canvas at the viewport-coord position of the picked
+ *  element's bbox-at-composite. If this rectangle doesn't surround
+ *  the actual element pixels in the screenshot, framing is wrong —
+ *  visible and unmistakable.
+ *
+ *  Enable with `window.__insitue_capture_debug__ = true` (e.g. in
+ *  DevTools, before triggering a capture). */
+function paintFramingDebugRect(
+  ctx: CanvasRenderingContext2D,
+  bbox: { x: number; y: number; width: number; height: number },
+  cropRect: DOMRect,
+  pixelRatio: number,
+): void {
+  if (typeof window === "undefined") return;
+  if (!(window as unknown as { __insitue_capture_debug__?: boolean })
+    .__insitue_capture_debug__)
+    return;
+  const dx = Math.round((bbox.x - cropRect.x) * pixelRatio);
+  const dy = Math.round((bbox.y - cropRect.y) * pixelRatio);
+  const dw = Math.round(bbox.width * pixelRatio);
+  const dh = Math.round(bbox.height * pixelRatio);
+  ctx.save();
+  ctx.strokeStyle = "#ff00ff";
+  ctx.lineWidth = Math.max(1, Math.round(pixelRatio));
+  ctx.strokeRect(dx + 0.5, dy + 0.5, Math.max(1, dw - 1), Math.max(1, dh - 1));
+  ctx.restore();
+}
+
 /** Walk up from the picked element to find a meaningfully-sized
  *  ancestor to screenshot — so the thumbnail has enough visual
  *  context for a human reviewer to recognise the bug. */
@@ -117,6 +287,8 @@ async function renderViewportCrop(
   cropRect: DOMRect,
   pixelRatio: number,
   placeholderMeta: PlaceholderMeta,
+  pickedEl: RasterisableElement | null = null,
+  isInFixedChain = false,
 ): Promise<{
   dataUrl: string | null;
   /** True when the rasterised canvas's 16-pixel sample grid hit a
@@ -133,6 +305,14 @@ async function renderViewportCrop(
    *      bytewise uniform (e.g. case 4 — CSS bg-image that html-to-
    *      image silently drops, leaving a solid fill). */
   placeholderReason?: "rasterise-error" | "looks-blank";
+  /** Picked-element bbox re-read immediately before the composite
+   *  step (i.e. after html-to-image's async render finished). Equals
+   *  the click-time bbox when the page didn't reflow during capture. */
+  bboxAtComposite?: { x: number; y: number; width: number; height: number };
+  /** The final crop rect used for composite — may differ from the
+   *  input `cropRect` when the picked element moved (layout shift)
+   *  and the crop was re-centered. */
+  effectiveCropRect?: DOMRect;
 }> {
   const bodyBg = getComputedStyle(document.body).backgroundColor;
   const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
@@ -205,7 +385,7 @@ async function renderViewportCrop(
     return !shouldSkipForHti(n);
   };
   try {
-    fullCanvas = await toCanvas(document.body, {
+    fullCanvas = await rasteriseDocument(document.body, {
       pixelRatio,
       cacheBust: false,
       backgroundColor,
@@ -231,7 +411,7 @@ async function renderViewportCrop(
     const originals = imgs.map((i) => i.getAttribute("src"));
     try {
       for (const img of imgs) img.setAttribute("src", TRANSPARENT_PNG);
-      fullCanvas = await toCanvas(document.body, {
+      fullCanvas = await rasteriseDocument(document.body, {
         pixelRatio,
         cacheBust: false,
         backgroundColor,
@@ -270,20 +450,70 @@ async function renderViewportCrop(
     };
   }
 
-  // 2. Composite html-to-image output onto our crop canvas.
-  const sx = window.scrollX;
-  const sy = window.scrollY;
+  // 2. Re-read the picked element's bbox NOW (after html-to-image's
+  //    async render finished) so we composite around its actual
+  //    composite-time position — not the click-time bbox that may
+  //    have shifted due to font load / banner dismiss / image decode.
+  //    Layout-shift bugs (case 16) die here.
+  let bboxAtComposite: { x: number; y: number; width: number; height: number } | undefined;
+  let composeRect = cropRect;
+  if (pickedEl && pickedEl.isConnected) {
+    let r: DOMRect;
+    try {
+      r = pickedEl.getBoundingClientRect();
+    } catch {
+      r = new DOMRect(cropRect.x, cropRect.y, cropRect.width, cropRect.height);
+    }
+    bboxAtComposite = {
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      width: Math.round(r.width),
+      height: Math.round(r.height),
+    };
+    // Re-center the crop on the freshly-read bbox, keeping the same
+    // dimensions and viewport clamps as the click-time computation.
+    const cropW = cropRect.width;
+    const cropH = cropRect.height;
+    const cx = r.x + r.width / 2;
+    const cy = r.y + r.height / 2;
+    const nx = Math.max(0, Math.min(window.innerWidth - cropW, cx - cropW / 2));
+    const ny = Math.max(0, Math.min(window.innerHeight - cropH, cy - cropH / 2));
+    composeRect = new DOMRect(nx, ny, cropW, cropH);
+  }
+
+  // 3. Composite html-to-image output onto our crop canvas.
+  //
+  //    Source-coord rules:
+  //    - Default: viewport coords + page scroll = document coords.
+  //      `toCanvas(document.body)` renders the full document at its
+  //      natural layout positions (scroll=0). Adding `scrollY` to
+  //      `composeRect.y` translates from viewport to document space.
+  //    - Fixed chain: `position: fixed` elements render in the canvas
+  //      at their viewport position *in document space* (because
+  //      `toCanvas` uses a foreignObject containing block, and fixed
+  //      positions resolve against that). Adding `scrollY` would
+  //      double-count. So we use the viewport coords directly.
+  const sx = isInFixedChain ? 0 : window.scrollX;
+  const sy = isInFixedChain ? 0 : window.scrollY;
   ctx.drawImage(
     fullCanvas,
-    Math.round((cropRect.x + sx) * pixelRatio),
-    Math.round((cropRect.y + sy) * pixelRatio),
-    Math.round(cropRect.width * pixelRatio),
-    Math.round(cropRect.height * pixelRatio),
+    Math.round((composeRect.x + sx) * pixelRatio),
+    Math.round((composeRect.y + sy) * pixelRatio),
+    Math.round(composeRect.width * pixelRatio),
+    Math.round(composeRect.height * pixelRatio),
     0,
     0,
     out.width,
     out.height,
   );
+
+  // Dev-only: paint a magenta rectangle at the picked element's
+  // expected position in the crop. If this doesn't surround the
+  // picked element's pixels (e.g. its orange outline), the framing
+  // math is wrong.
+  if (bboxAtComposite) {
+    paintFramingDebugRect(ctx, bboxAtComposite, composeRect, pixelRatio);
+  }
 
   // 3. Manual <img> overlay — paint absolutely-positioned imgs on
   //    TOP, replacing the empty/parent-bg areas html-to-image left
@@ -309,7 +539,7 @@ async function renderViewportCrop(
   //    `defaultPixelPerfect` (getDisplayMedia, no compromises).
   const drawnImgs = await drawAbsoluteImagesOnto(
     ctx,
-    cropRect,
+    composeRect,
     pixelRatio,
     failedImages,
   );
@@ -322,7 +552,7 @@ async function renderViewportCrop(
     out.width,
     out.height,
   );
-  detectUnrenderedImages(ctx, cropRect, out, pixelRatio, failedImages);
+  detectUnrenderedImages(ctx, composeRect, out, pixelRatio, failedImages);
 
   // Fully-uniform raster — html-to-image returned bytes but every
   // sample is bytewise identical. Two possibilities:
@@ -352,6 +582,8 @@ async function renderViewportCrop(
       blankScore,
       failedImages,
       placeholderReason: "looks-blank",
+      ...(bboxAtComposite ? { bboxAtComposite } : {}),
+      effectiveCropRect: composeRect,
     };
   }
 
@@ -360,6 +592,8 @@ async function renderViewportCrop(
     looksBlank,
     blankScore,
     failedImages,
+    ...(bboxAtComposite ? { bboxAtComposite } : {}),
+    effectiveCropRect: composeRect,
   };
 }
 
@@ -1128,6 +1362,11 @@ export async function buildBundle(
     const context = findContextAncestor(el);
     const ar = context.getBoundingClientRect();
 
+    // Framing inspection — drives composite math (fixed-chain skip
+    // scrollY) and surfaces diagnostics so "the crop missed the
+    // element" bugs are debuggable from the bundle alone.
+    const framing = inspectPickedFraming(el);
+
     const MIN_W = 420;
     const MIN_H = 140;
     const cropW = Math.min(
@@ -1170,6 +1409,10 @@ export async function buildBundle(
     let shippedBlankScore: number | undefined;
     let shippedLooksBlank = false;
     let failedImagesCount = 0;
+    let pickedBboxAtComposite:
+      | { x: number; y: number; width: number; height: number }
+      | undefined;
+    let effectiveCropRect: DOMRect | undefined;
 
     // Build the placeholder card metadata up-front so the painter
     // has tag + selector + dimensions ready if it needs to swap.
@@ -1202,10 +1445,17 @@ export async function buildBundle(
           cropRect,
           pixelRatioUsed,
           placeholderMeta,
+          el,
+          framing.isInFixedChain,
         );
         const dur = performance.now() - t0;
         failedImagesCount = r.failedImages.size;
-        const quality = assessCaptureQuality(cropRect, r.failedImages);
+        pickedBboxAtComposite = r.bboxAtComposite;
+        effectiveCropRect = r.effectiveCropRect;
+        const quality = assessCaptureQuality(
+          r.effectiveCropRect ?? cropRect,
+          r.failedImages,
+        );
         attempts.push({
           layer: 1,
           outcome: !r.dataUrl
@@ -1229,14 +1479,15 @@ export async function buildBundle(
                 quality.hasCanvas
               ? `${describeImperfection(quality)} couldn't be embedded — those regions are shown as placeholders in the screenshot`
               : undefined;
+          const reportedRect = r.effectiveCropRect ?? cropRect;
           screenshot = {
             mime: "image/png",
             dataUrl: r.dataUrl,
             bounds: {
-              x: cropRect.x,
-              y: cropRect.y,
-              width: cropRect.width,
-              height: cropRect.height,
+              x: reportedRect.x,
+              y: reportedRect.y,
+              width: reportedRect.width,
+              height: reportedRect.height,
             },
             source: "rasterise",
             ...(qualityNote ? { qualityNote } : {}),
@@ -1280,21 +1531,34 @@ export async function buildBundle(
       l1 && (l1.outcome === "success" || l1.outcome === "blank")
         ? "layer1-only"
         : "both-failed";
+    // Drift between click-time and composite-time bbox. >8px on any
+    // axis is a noticeable layout shift; >0 but <8 is sub-pixel
+    // rounding / minor animation.
+    const driftRect = effectiveCropRect ?? cropRect;
+    let pickedBboxDriftPx: number | undefined;
+    if (pickedBboxAtComposite) {
+      pickedBboxDriftPx = Math.max(
+        Math.abs(pickedBboxAtComposite.x - Math.round(elementBboxRaw.x)),
+        Math.abs(pickedBboxAtComposite.y - Math.round(elementBboxRaw.y)),
+        Math.abs(pickedBboxAtComposite.width - Math.round(elementBboxRaw.width)),
+        Math.abs(pickedBboxAtComposite.height - Math.round(elementBboxRaw.height)),
+      );
+    }
     captureDiagnostics = {
       strategy,
       attemptedLayers: attempts,
       shippedLooksBlank,
       ...(shippedBlankScore !== undefined ? { shippedBlankScore } : {}),
       cropRect: {
-        x: Math.round(cropRect.x),
-        y: Math.round(cropRect.y),
-        width: Math.round(cropRect.width),
-        height: Math.round(cropRect.height),
+        x: Math.round(driftRect.x),
+        y: Math.round(driftRect.y),
+        width: Math.round(driftRect.width),
+        height: Math.round(driftRect.height),
         outsideViewport:
-          cropRect.x < 0 ||
-          cropRect.y < 0 ||
-          cropRect.x + cropRect.width > window.innerWidth ||
-          cropRect.y + cropRect.height > window.innerHeight,
+          driftRect.x < 0 ||
+          driftRect.y < 0 ||
+          driftRect.x + driftRect.width > window.innerWidth ||
+          driftRect.y + driftRect.height > window.innerHeight,
       },
       elementBbox: {
         x: Math.round(elementBboxRaw.x),
@@ -1310,6 +1574,10 @@ export async function buildBundle(
       shadowDomDepthInCrop: cropContent.shadowDomDepth,
       browserUA:
         typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 240) : "",
+      pickedPosition: framing.position,
+      pickedContainingBlock: framing.containingBlock,
+      ...(pickedBboxAtComposite ? { pickedBboxAtComposite } : {}),
+      ...(pickedBboxDriftPx !== undefined ? { pickedBboxDriftPx } : {}),
     };
   }
 

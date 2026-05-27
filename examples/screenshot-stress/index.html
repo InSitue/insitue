@@ -180,6 +180,136 @@
         color: #fff;
       }
 
+      /* ── FRAMING CASES (12-16) ────────────────────────────────────
+         These cases probe the *crop math* in buildBundle, not html-to-
+         image fidelity. Each isolates one root cause that makes the
+         picked element fall outside the screenshot crop:
+         fixed/sticky/transformed-ancestor/inner-scroll/layout-shift. */
+
+      /* CASE 12 — picked element is position:fixed */
+      .case-fixed-target .target {
+        position: fixed;
+        top: 220px;
+        right: 28px;
+        width: 220px;
+        height: 96px;
+        background: #ef4444;
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 18px/1 sans-serif;
+        color: #fff;
+        box-shadow: 0 12px 24px -8px rgba(239, 68, 68, 0.5);
+      }
+      /* Placeholder in flow so the card height doesn't collapse. */
+      .case-fixed-target .placeholder {
+        min-height: 160px;
+        border: 1px dashed #d4d4dc;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 600 12px/1 ui-monospace, monospace;
+        color: #6b6c77;
+      }
+
+      /* CASE 13 — sticky element after scroll-past */
+      .case-sticky-stuck {
+        grid-column: 1 / -1;
+      }
+      .case-sticky-stuck .stuck-container {
+        height: 600px;
+        background: #fef3c7;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .case-sticky-stuck .target {
+        position: sticky;
+        top: 8px;
+        background: #8b5cf6;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 22px/1 sans-serif;
+        color: #fff;
+        min-height: 96px;
+      }
+      .case-sticky-stuck .below {
+        margin-top: 12px;
+        height: 480px;
+        background: repeating-linear-gradient(
+          135deg, #fff 0 16px, #fde68a 16px 32px
+        );
+        border-radius: 8px;
+      }
+
+      /* CASE 14 — transformed ANCESTOR (vs case 11's transformed target) */
+      .case-transformed-ancestor .wrap {
+        transform: translateY(-30px) scale(0.95);
+        transform-origin: top left;
+        padding: 20px;
+        border: 1px dashed #d4d4dc;
+        border-radius: 10px;
+      }
+      .case-transformed-ancestor .target {
+        background: #0ea5e9;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 22px/1 sans-serif;
+        color: #fff;
+        min-height: 120px;
+      }
+
+      /* CASE 15 — element only visible after inner-container scroll */
+      .case-inner-scroll .scroller {
+        max-height: 200px;
+        overflow: auto;
+        background: #f4f4f6;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .case-inner-scroll .scroller .filler-top,
+      .case-inner-scroll .scroller .filler-bottom {
+        height: 220px;
+        background: repeating-linear-gradient(
+          45deg, #e4e4e7 0 10px, #f4f4f6 10px 20px
+        );
+        border-radius: 6px;
+      }
+      .case-inner-scroll .target {
+        margin: 16px 0;
+        background: #22c55e;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 22px/1 sans-serif;
+        color: #fff;
+        min-height: 96px;
+      }
+
+      /* CASE 16 — layout shift between pick-time and composite */
+      .case-layout-shift .shifter {
+        height: 0;
+        background: linear-gradient(90deg, #f59e0b, #f97316);
+        border-radius: 6px;
+        transition: height 200ms ease-out;
+      }
+      .case-layout-shift.shifted .shifter {
+        height: 120px;
+      }
+      .case-layout-shift .target {
+        margin-top: 12px;
+        background: #db2777;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font: 800 22px/1 sans-serif;
+        color: #fff;
+        min-height: 96px;
+      }
+
       /* CASE 5/6/9 etc inherit base .target gradient. */
     </style>
   </head>
@@ -390,6 +520,121 @@
         <div class="target">SCALED 0.92 · TILT -1.5°</div>
       </section>
 
+      <!-- ─── CASE 12 — position:fixed picked element ────────────── -->
+      <section
+        class="case case-fixed-target"
+        data-stress-case="fixed-target"
+        data-stress-prep="scroll-page-1200"
+      >
+        <header>
+          <div class="tag">case 12</div>
+          <h2>Picked element is position:fixed</h2>
+          <p class="why">
+            FRAMING bug. <code>getBoundingClientRect</code> gives viewport
+            coords; <code>toCanvas(document.body)</code> renders fixed
+            elements at viewport position in document space. Composite
+            math adds <code>scrollY</code> anyway, so the crop lands on
+            the wrong document row. After scrolling 1200px down, the
+            red box is still visible on-screen but the screenshot will
+            show whatever's at document y ≈ 1200 + viewport y.
+          </p>
+        </header>
+        <div class="placeholder">target lives at top:220px, right:28px (fixed)</div>
+        <div class="target">FIXED · pick me</div>
+      </section>
+
+      <!-- ─── CASE 13 — sticky element after scroll-past ─────────── -->
+      <section
+        class="case case-sticky-stuck"
+        data-stress-case="sticky-stuck"
+        data-stress-prep="scroll-into-view-stuck"
+      >
+        <header>
+          <div class="tag">case 13</div>
+          <h2>Sticky element after it has stuck</h2>
+          <p class="why">
+            FRAMING bug. After scrolling past the natural position, the
+            picked sticky element has <code>top: 8px</code> in the
+            viewport, but its document offset is fixed at its container
+            position. <code>scrollY</code> addition double-counts.
+          </p>
+        </header>
+        <div class="stuck-container">
+          <div class="target">STUCK · pick me after scroll</div>
+          <div class="below"></div>
+        </div>
+      </section>
+
+      <!-- ─── CASE 14 — transformed ANCESTOR ─────────────────────── -->
+      <section
+        class="case case-transformed-ancestor"
+        data-stress-case="transformed-ancestor"
+        data-stress-prep="none"
+      >
+        <header>
+          <div class="tag">case 14</div>
+          <h2>Target inside transformed ancestor</h2>
+          <p class="why">
+            FRAMING bug. <code>getBoundingClientRect</code> returns the
+            post-transform rect. <code>toCanvas(document.body)</code>'s
+            foreignObject rasterise may use pre-transform layout for
+            the composite. Without a transform-aware crop, the picked
+            element falls outside the captured region.
+          </p>
+        </header>
+        <div class="wrap">
+          <div class="target">TRANSFORMED · ancestor</div>
+        </div>
+      </section>
+
+      <!-- ─── CASE 15 — inner-scroll container ───────────────────── -->
+      <section
+        class="case case-inner-scroll"
+        data-stress-case="inner-scroll"
+        data-stress-prep="scroll-inner-200"
+      >
+        <header>
+          <div class="tag">case 15</div>
+          <h2>Element only visible after inner-container scroll</h2>
+          <p class="why">
+            FRAMING bug. Page <code>scrollY</code> is 0, but the
+            container's <code>scrollTop</code> is 200px — meaning the
+            target's viewport y already accounts for the inner scroll.
+            Adding page <code>scrollY</code> to source coords is fine;
+            but if the rasteriser doesn't render the inner-scrolled
+            position, the crop reads from the unscrolled content row.
+          </p>
+        </header>
+        <div class="scroller">
+          <div class="filler-top"></div>
+          <div class="target">INNER-SCROLL · pick after scrolling container</div>
+          <div class="filler-bottom"></div>
+        </div>
+      </section>
+
+      <!-- ─── CASE 16 — layout shift between pick and composite ──── -->
+      <section
+        class="case case-layout-shift"
+        data-stress-case="layout-shift"
+        data-stress-prep="trigger-layout-shift"
+      >
+        <header>
+          <div class="tag">case 16</div>
+          <h2>Element moves between pick-time and rasterise</h2>
+          <p class="why">
+            FRAMING bug. Simulates a font-load/banner-dismiss reflow
+            mid-capture. The shifter expands by 120px ~50ms after the
+            pick, while html-to-image is still cloning the DOM. By
+            composite time, the target sits at a different document y
+            than <code>pickedRect</code> captured at click-time. The
+            fix: re-read <code>getBoundingClientRect</code> immediately
+            before composite.
+          </p>
+        </header>
+        <div class="shifter"></div>
+        <div class="target">SHIFTS-AFTER-PICK · pick me</div>
+      </section>
+
       <!-- ─── CASE 10 — sticky element ───────────────────────────── -->
       <section class="case case-sticky">
         <header>
@@ -448,6 +693,58 @@
         requestAnimationFrame(paint);
       }
       paint();
+
+      // Case 16 — trigger layout shift on click. The picked element
+      // moves down as the shifter grows. The capture should still
+      // contain the picked element; the fix is to re-read its bbox
+      // immediately before composite.
+      window.__stressPrep_layoutShift = function () {
+        document
+          .querySelectorAll(".case-layout-shift")
+          .forEach((el) => el.classList.add("shifted"));
+      };
+
+      // Case 15 — scroll the inner container so the target is only
+      // reachable through inner-scroll, not page-scroll.
+      window.__stressPrep_innerScroll = function () {
+        document
+          .querySelectorAll(".case-inner-scroll .scroller")
+          .forEach((el) => {
+            el.scrollTop = 200;
+          });
+      };
+
+      // Case 13 — scroll the page so the sticky target is forced
+      // into its stuck state at top:8px in the viewport.
+      window.__stressPrep_stickyStuck = function () {
+        const c = document.querySelector(".case-sticky-stuck");
+        if (!c) return;
+        const r = c.getBoundingClientRect();
+        window.scrollTo({
+          top: window.scrollY + r.top - 4,
+          left: 0,
+          behavior: "instant",
+        });
+      };
+
+      // Case 12 — scroll the page deep so document-space y of the
+      // fixed target diverges from its viewport-space y by ~1200px.
+      window.__stressPrep_fixedTarget = function () {
+        window.scrollTo({ top: 1200, left: 0, behavior: "instant" });
+      };
+
+      // Reset between cases so prep state doesn't bleed across runs.
+      window.__stressPrep_reset = function () {
+        window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+        document
+          .querySelectorAll(".case-layout-shift")
+          .forEach((el) => el.classList.remove("shifted"));
+        document
+          .querySelectorAll(".case-inner-scroll .scroller")
+          .forEach((el) => {
+            el.scrollTop = 0;
+          });
+      };
 
       // Case 8 — attach an open shadowRoot with rendered content.
       const host = document.getElementById("shadow-host");

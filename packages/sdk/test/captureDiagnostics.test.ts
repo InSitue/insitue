@@ -40,6 +40,16 @@ describe("captureDiagnostics — pinning the v4 contract (insitue#10)", () => {
     expect(typeof d.hasIframeInCrop).toBe("boolean");
     expect(typeof d.shadowDomDepthInCrop).toBe("number");
     expect(d.browserUA.length).toBeGreaterThan(0);
+    // Framing additions — schema v4 additive. Present on every
+    // capture so the dashboard can debug "crop missed the element"
+    // reports without re-running the user's session.
+    expect(typeof d.pickedPosition).toBe("string");
+    // `pickedContainingBlock` is `null` for in-flow targets with no
+    // scrolling/transformed ancestor — both `null` and a populated
+    // object are valid; the field must be present either way.
+    expect(d.pickedContainingBlock === null || typeof d.pickedContainingBlock === "object").toBe(true);
+    expect(d.pickedBboxAtComposite).toBeDefined();
+    expect(typeof d.pickedBboxDriftPx).toBe("number");
   });
 
   it("records the layer attempt's duration as a number", async () => {

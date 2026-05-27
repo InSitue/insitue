@@ -28,7 +28,13 @@ export default defineConfig({
   dts: true,
   clean: true,
   external: ["react"],
-  noExternal: ["preact", /^preact\//, "@insitue/capture-core", "html-to-image"],
+  noExternal: [
+    "preact",
+    /^preact\//,
+    "@insitue/capture-core",
+    "html-to-image",
+    "modern-screenshot",
+  ],
   define: {
     __SDK_VERSION__: JSON.stringify(PKG_VERSION),
   },

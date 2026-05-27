@@ -171,6 +171,37 @@ export interface CaptureDiagnostics {
    *  already gather most of this elsewhere; keeping a short copy
    *  here keeps the diagnostics row self-contained. */
   browserUA: string;
+  /** Framing telemetry — surfaces *why* the crop landed where it did
+   *  when the picked element is unexpectedly absent from the
+   *  screenshot. Additive in schema v4. */
+  /** Computed `position` of the picked element at click time. `fixed`
+   *  and `sticky` need special composite math because their viewport
+   *  rect doesn't translate to document-space via `+ scrollY`. */
+  pickedPosition?: string;
+  /** Nearest scrollable-or-transformed ancestor that affects the
+   *  picked element's effective document coords. `null` when the
+   *  picked element is plain in-flow with no transformed/scrolling
+   *  ancestor. */
+  pickedContainingBlock?: {
+    selector?: string;
+    scrollTop: number;
+    scrollLeft: number;
+    transform?: string;
+  } | null;
+  /** Picked-element bbox re-read IMMEDIATELY before the composite
+   *  step — i.e. after html-to-image has finished its async render.
+   *  Differs from `elementBbox` (click-time) when the page reflows
+   *  mid-capture (font load, banner dismiss, image decode). */
+  pickedBboxAtComposite?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  /** Max single-axis drift between `elementBbox` and
+   *  `pickedBboxAtComposite` (CSS px). 0 = stable; >8 = noticeable
+   *  layout shift during capture. */
+  pickedBboxDriftPx?: number;
 }
 
 export interface CaptureBundle {
