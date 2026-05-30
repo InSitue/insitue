@@ -12,9 +12,20 @@
  * change ships without a green test here. Patches we ship without
  * verification end up as dogfood-found regressions.
  */
+import { readFileSync } from "node:fs";
 import { defineConfig } from "vitest/config";
 
+// Mirror tsup's build-time inline of `__SDK_VERSION__` so source that
+// self-identifies (capture widget footer, the #83 heartbeat body) runs
+// under test instead of throwing a ReferenceError that gets swallowed.
+const PKG_VERSION = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf-8"),
+).version as string;
+
 export default defineConfig({
+  define: {
+    __SDK_VERSION__: JSON.stringify(PKG_VERSION),
+  },
   test: {
     include: ["test/**/*.test.ts"],
     browser: {

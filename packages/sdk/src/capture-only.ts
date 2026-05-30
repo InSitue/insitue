@@ -73,7 +73,49 @@ export interface CaptureOnlyOptions {
 }
 
 const DEFAULT_INGEST = "https://www.insitue.com/api/v1/capture";
+const DEFAULT_HEARTBEAT = "https://www.insitue.com/api/v1/heartbeat";
 const DEFAULT_COMPANION_PORT = 5747;
+
+/** Derive the heartbeat URL from the (possibly overridden) capture
+ *  endpoint so a custom `endpoint` prop points both at the same host:
+ *  swap a trailing `/capture` for `/heartbeat`. Falls back to the
+ *  default heartbeat URL when no override is set or the shape is
+ *  unexpected. */
+export function heartbeatUrl(captureEndpoint: string | undefined): string {
+  if (!captureEndpoint) return DEFAULT_HEARTBEAT;
+  return captureEndpoint.endsWith("/capture")
+    ? captureEndpoint.slice(0, -"/capture".length) + "/heartbeat"
+    : DEFAULT_HEARTBEAT;
+}
+
+/** Fire-and-forget liveness ping (InSitue/insitue-cloud#83). Sent once
+ *  when the cloud-sink snippet mounts — it's how the dashboard knows the
+ *  snippet is embedded and loading *before* anyone files a bug, which
+ *  drives the onboarding "Embed the snippet" step. Best-effort: a failed
+ *  ping just means the step clears later, on the first real capture. */
+export function pingHeartbeat(
+  sink: Extract<CaptureSink, { kind: "cloud" }>,
+): void {
+  try {
+    void fetch(heartbeatUrl(sink.endpoint), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-insitue-key": sink.projectKey,
+      },
+      body: JSON.stringify({
+        projectKey: sink.projectKey,
+        sdkVersion: __SDK_VERSION__,
+      }),
+      credentials: "omit",
+      keepalive: true,
+    }).catch(() => {
+      /* swallow network errors — heartbeat is advisory */
+    });
+  } catch {
+    /* fetch unavailable / threw synchronously — ignore */
+  }
+}
 
 /** Resolve `opts` → the concrete sink we'll use. */
 function resolveSink(opts: CaptureOnlyOptions): CaptureSink {
@@ -1015,6 +1057,9 @@ function CaptureApp(props: AppProps) {
 export function mountCaptureOnly(opts: CaptureOnlyOptions = {}): () => void {
   installRuntimeCollectors();
   const sink = resolveSink(opts);
+  // Tell the cloud the snippet is live the moment it mounts (#83) —
+  // independent of, and ahead of, any capture.
+  if (sink.kind === "cloud") pingHeartbeat(sink);
   const host = document.createElement("div");
   host.id = "insitue-capture-root";
   host.setAttribute("data-insitue", "");
