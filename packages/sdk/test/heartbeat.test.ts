@@ -4,7 +4,7 @@ import { heartbeatUrl, pingHeartbeat } from "../src/capture-only.ts";
 describe("heartbeatUrl — derive from capture endpoint", () => {
   it("defaults to the cloud heartbeat URL when no endpoint override", () => {
     expect(heartbeatUrl(undefined)).toBe(
-      "https://www.insitue.com/api/v1/heartbeat",
+      "https://app.insitue.com/api/v1/heartbeat",
     );
   });
 
@@ -16,7 +16,7 @@ describe("heartbeatUrl — derive from capture endpoint", () => {
 
   it("falls back to default when the endpoint isn't a /capture URL", () => {
     expect(heartbeatUrl("https://weird.example.com/ingest")).toBe(
-      "https://www.insitue.com/api/v1/heartbeat",
+      "https://app.insitue.com/api/v1/heartbeat",
     );
   });
 });
@@ -36,7 +36,7 @@ describe("pingHeartbeat — fire-and-forget liveness ping", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(url).toBe("https://www.insitue.com/api/v1/heartbeat");
+    expect(url).toBe("https://app.insitue.com/api/v1/heartbeat");
     expect(init?.method).toBe("POST");
     expect(
       (init?.headers as Record<string, string>)["x-insitue-key"],
