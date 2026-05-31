@@ -72,8 +72,12 @@ export interface CaptureOnlyOptions {
   sink?: CaptureSink;
 }
 
-const DEFAULT_INGEST = "https://www.insitue.com/api/v1/capture";
-const DEFAULT_HEARTBEAT = "https://www.insitue.com/api/v1/heartbeat";
+// The cloud app (and its public ingest API) lives on app.insitue.com;
+// insitue.com / www is the static marketing site and 404s /api. The
+// app/www split (cloud repo #41) moved the API here, but these defaults
+// kept pointing at www — so default-config captures silently 404'd.
+const DEFAULT_INGEST = "https://app.insitue.com/api/v1/capture";
+const DEFAULT_HEARTBEAT = "https://app.insitue.com/api/v1/heartbeat";
 const DEFAULT_COMPANION_PORT = 5747;
 
 /** Derive the heartbeat URL from the (possibly overridden) capture
