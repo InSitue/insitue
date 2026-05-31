@@ -138,8 +138,18 @@ function resolveSink(opts: CaptureOnlyOptions): CaptureSink {
 
 /** Cloud sink — HTTPS POST. Best-effort; the cloud dedupes retries
  *  server-side, and the bundle is in `window.__insitue_capture__` as a
- *  fallback hook regardless of network state. */
-async function postCloud(
+ *  fallback hook regardless of network state.
+ *
+ *  NOT `keepalive: true`: the Fetch spec caps a keepalive request body
+ *  at 64 KiB, and a capture bundle (screenshot data-URL + DOM subtree +
+ *  styles) routinely blows past that — the browser then refuses to send
+ *  it ("Reached maximum amount of queued data of 64Kb for keepalive
+ *  requests"), and since this is best-effort the failure is swallowed
+ *  and the report silently never lands. Capture is a deliberate submit
+ *  while the widget is open (the page isn't unloading), so a normal
+ *  fetch — which has no body-size cap — is correct. keepalive is only
+ *  for the tiny heartbeat, which stays well under the cap. */
+export async function postCloud(
   sink: Extract<CaptureSink, { kind: "cloud" }>,
   draft: IssueDraft,
 ): Promise<void> {
@@ -157,7 +167,6 @@ async function postCloud(
         projectKey: sink.projectKey,
       }),
       credentials: "omit",
-      keepalive: true,
     });
   } catch {
     /* swallow network errors */
